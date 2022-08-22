@@ -1,0 +1,4 @@
+{
+  "connection_string": "host='localhost' dbname='testdb' user='postgres' password='secret'",
+  "max_simultaneous_jobs": 5
+}

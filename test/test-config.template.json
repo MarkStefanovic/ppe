@@ -1,0 +1,3 @@
+{
+  "test-db-connection-str": "host='localhost' dbname='testdb' user='postgres' password='secret'"
+}

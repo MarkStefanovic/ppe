@@ -1,0 +1,14 @@
+# to create new env: conda env create --file environment.yml
+# to update env: conda env update --file environment.yml --prune
+name: ppe
+channels:
+- conda-forge
+- defaults
+dependencies:
+- python>=3.10
+- pip
+- mypy
+- pytest
+- pip:
+  - psycopg[binary]
+  - psycopg_pool
