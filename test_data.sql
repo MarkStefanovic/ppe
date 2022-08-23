@@ -9,7 +9,6 @@ TRUNCATE TABLE ppe.job_skip CASCADE;
 TRUNCATE TABLE ppe.job_success CASCADE;
 TRUNCATE TABLE ppe.schedule CASCADE;
 TRUNCATE TABLE ppe.task CASCADE;
-TRUNCATE TABLE ppe.task_dependency CASCADE;
 TRUNCATE TABLE ppe.task_schedule CASCADE;
 
 DO $$
@@ -22,6 +21,7 @@ DECLARE
     v_schedule_1_id INT;
     v_schedule_2_id INT;
     v_hourly_during_work_hours_id INT;
+    v_resource_1_id INT;
     v_task_1_id INT;
     v_task_2_id INT;
     v_task_3_id INT;
@@ -54,6 +54,10 @@ BEGIN
         ,   p_timeout_seconds := 15
         )
     );
+
+    v_resource_1_id = (SELECT * FROM ppe.create_resource(p_name := 'dw', p_capacity := 3));
+    CALL ppe.assign_resource_to_task(p_task_id := v_task_1_id, p_resource_id := v_resource_1_id, p_units := 1);
+    CALL ppe.assign_resource_to_task(p_task_id := v_task_2_id, p_resource_id := v_resource_1_id, p_units := 1);
 
     v_schedule_1_id = (SELECT * FROM ppe.create_schedule(p_schedule_name := 'Every 10s' , p_min_seconds_between_attempts := 10));
     v_schedule_2_id = (SELECT * FROM ppe.create_schedule(p_schedule_name := 'Every 7s' , p_min_seconds_between_attempts := 7));
@@ -88,6 +92,7 @@ BEGIN
     RAISE NOTICE 'v_task_1_id: %', v_task_1_id;
     RAISE NOTICE 'v_task_2_id: %', v_task_2_id;
     RAISE NOTICE 'v_task_3_id: %', v_task_3_id;
+    RAISE NOTICE 'v_resource_1_id: %', v_resource_1_id;
     RAISE NOTICE 'v_schedule_1_id: %', v_schedule_1_id;
     RAISE NOTICE 'v_schedule_2_id: %', v_schedule_2_id;
     RAISE NOTICE 'v_batch_id: %', v_batch_id;
@@ -100,11 +105,8 @@ $$;
 SELECT
     t.task_id
 ,   t.task_name
-,   array_to_string(t.cmd, '$$$') AS cmd
+,   t.cmd
 ,   t.task_sql
 ,   t.retries
 ,   t.timeout_seconds
 FROM ppe.get_ready_tasks(p_max_jobs := 5) AS t;
-
-SELECT * FROM ppe.task;
-SELECT * FROM ppe.job;

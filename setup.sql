@@ -60,11 +60,65 @@ END;
 $$
 LANGUAGE plpgsql;
 
-CREATE TABLE ppe.task_dependency (
-    task_id INT NOT NULL REFERENCES ppe.task (task_id)
-,   dependency_task_id INT NOT NULL REFERENCES ppe.task(task_id)
-,   PRIMARY KEY (task_id, dependency_task_id)
+CREATE TABLE ppe.resource (
+    resource_id SERIAL PRIMARY KEY
+,   resource_name TEXT NOT NULL
+,   capacity INT NOT NULL CHECK (capacity > 0)
+,   enable_flag BOOL NOT NULL DEFAULT TRUE
+,   UNIQUE (resource_name)
 );
+
+CREATE FUNCTION ppe.create_resource(
+    p_name TEXT
+,   p_capacity INT
+)
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE v_resource_id INT;
+BEGIN
+    ASSERT length(p_name) > 0, 'p_name cannot be blank.';
+    ASSERT p_capacity > 0, 'p_max_allowed must be > 0.';
+
+    WITH ins AS (
+        INSERT INTO ppe.resource (resource_name, capacity)
+        VALUES (p_name, p_capacity)
+        RETURNING resource_id
+    )
+    SELECT resource_id
+    INTO v_resource_id
+    FROM ins;
+
+    RETURN v_resource_id;
+END;
+$$;
+
+CREATE TABLE ppe.task_resource (
+    task_id INT NOT NULL REFERENCES ppe.task (task_id)
+,   resource_id INT NOT NULL REFERENCES ppe.resource (resource_id)
+,   units INT CHECK (units > 0)
+,   PRIMARY KEY (task_id, resource_id)
+);
+
+CREATE PROCEDURE ppe.assign_resource_to_task (
+    p_task_id INT
+,   p_resource_id INT
+,   p_units INT
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_capacity INT;
+BEGIN
+    ASSERT p_units > 0, 'p_units must be > 0.';
+
+    v_capacity = (SELECT r.capacity FROM ppe.resource AS r WHERE r.resource_id = p_resource_id);
+    ASSERT p_units < v_capacity, FORMAT('p_units (%s) is more than the resource''s capacity (%s).', p_units, v_capacity);
+
+    INSERT INTO ppe.task_resource (task_id, resource_id, units)
+    VALUES (p_task_id, p_resource_id, p_units);
+END;
+$$;
 
 CREATE TABLE ppe.schedule (
     schedule_id SERIAL PRIMARY KEY
@@ -462,7 +516,7 @@ AS $$
                 WHERE j.job_id = lc.job_id
             )
     )
-    , ready_jobs AS (
+    , ready_tasks AS (
         SELECT DISTINCT ON (t.task_id)
             t.task_id
         ,   t.task_name
@@ -506,18 +560,50 @@ AS $$
             t.task_id
         ,   la.ts DESC
     )
+    , running_job_resources AS (
+        SELECT
+            tr.resource_id
+        ,   SUM(tr.units) AS units_in_use
+        FROM running_jobs AS rj
+        JOIN ppe.task_resource AS tr
+            ON rj.task_id = tr.task_id
+        GROUP BY
+            tr.resource_id
+    )
+    , available_resources AS (
+        SELECT
+            r.resource_id
+        ,   r.capacity - COALESCE(rjr.units_in_use, 0) AS units_available
+        FROM ppe.resource AS r
+        LEFT JOIN running_job_resources AS rjr
+            ON r.resource_id = rjr.resource_id
+        WHERE
+            r.capacity - COALESCE(rjr.units_in_use, 0) > 0
+    )
+    , ready_jobs_with_available_resources AS (
+        SELECT DISTINCT
+            rt.task_id
+        FROM ready_tasks AS rt
+        JOIN ppe.task_resource AS tr
+            ON rt.task_id = tr.task_id
+        JOIN available_resources AS ar
+            ON rt.task_id = tr.task_id
+            AND tr.resource_id = ar.resource_id
+    )
     SELECT
-        rj.task_id
-    ,   rj.task_name
-    ,   rj.cmd
-    ,   rj.task_sql
-    ,   rj.retries
-    ,   rj.timeout_seconds
-    FROM ready_jobs AS rj
+        rt.task_id
+    ,   rt.task_name
+    ,   rt.cmd
+    ,   rt.task_sql
+    ,   rt.retries
+    ,   rt.timeout_seconds
+    FROM ready_tasks AS rt
+    JOIN ready_jobs_with_available_resources AS rjwar
+        ON rt.task_id = rjwar.task_id
     , LATERAL (
         VALUES (
-            rj.seconds_since_latest_attempt/3600
-        ,   rj.seconds_since_latest_attempt::float/rj.min_seconds_between_attempts
+            rt.seconds_since_latest_attempt/3600
+        ,   rt.seconds_since_latest_attempt::float/rt.min_seconds_between_attempts
         )
     ) AS c (
         hours_since_last_attempt
@@ -526,7 +612,7 @@ AS $$
     ORDER BY
         c.hours_since_last_attempt DESC
     ,   c.factor DESC
-    ,   rj.latest_attempt
+    ,   rt.latest_attempt
     LIMIT GREATEST((p_max_jobs - (SELECT COUNT(*) FROM running_jobs)), 0);
 $$
 LANGUAGE sql;
