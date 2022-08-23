@@ -3,8 +3,7 @@ import queue
 import threading
 import time
 
-from src import data
-from src.db import Db, open_db
+from src import adapter, data
 
 __all__ = ("Scheduler", "start")
 
@@ -14,7 +13,7 @@ logger = logging.getLogger()
 def start(
     *,
     job_queue: queue.Queue[data.Task],
-    db: Db = open_db(),
+    db: adapter.db.Db = adapter.db.open_db(),
 ) -> threading.Thread:
     logger.info("Starting scheduler...")
 
@@ -32,7 +31,7 @@ class Scheduler:
         self,
         *,
         job_queue: queue.Queue[data.Task],
-        db: Db,
+        db: adapter.db.Db,
     ):
         self._job_queue = job_queue
         self._db = db

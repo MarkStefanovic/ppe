@@ -2,10 +2,8 @@ import json
 import pathlib
 import typing
 
-import psycopg_pool
 import pytest
-
-from src.db import Db, open_db
+from psycopg2.pool import ThreadedConnectionPool
 
 
 @pytest.fixture(scope="function")
@@ -25,18 +23,15 @@ def connection_str_fixture(_config_fixture: dict[str, typing.Hashable]) -> str:
 
 
 @pytest.fixture(scope="function")
-def pool_fixture(_root_dir_fixture: pathlib.Path, connection_str_fixture: str) -> psycopg_pool.ConnectionPool:
-    pool = psycopg_pool.ConnectionPool(connection_str_fixture)
-    with pool.connection(5) as con:
-        con.execute("DROP SCHEMA IF EXISTS ppe CASCADE;")
-        sql_path = _root_dir_fixture.parent / "setup.sql"
-        with sql_path.open("r") as fh:
-            sql = "\n".join(fh.readlines())
-        con.execute(sql)
+def pool_fixture(_root_dir_fixture: pathlib.Path, connection_str_fixture: str) -> ThreadedConnectionPool:
+    pool = ThreadedConnectionPool(1, 5, dsn=connection_str_fixture)
+    with pool.getconn() as con:
+        with con.cursor() as cur:
+            cur.execute("DROP SCHEMA IF EXISTS ppe CASCADE;")
+            sql_path = _root_dir_fixture.parent / "setup.sql"
+            with sql_path.open("r") as fh:
+                sql = "\n".join(fh.readlines())
+            cur.execute(sql)
+        con.commit()
+        pool.putconn(con)
     return pool
-
-
-@pytest.fixture(scope="function")
-def db_fixture(pool_fixture: psycopg_pool.ConnectionPool) -> Db:
-    return open_db(pool=pool_fixture)
-

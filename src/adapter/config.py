@@ -5,7 +5,7 @@ import json
 import pathlib
 import typing
 
-from src import fs
+from src.adapter import fs
 
 
 @functools.lru_cache(maxsize=1)

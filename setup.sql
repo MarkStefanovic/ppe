@@ -90,16 +90,16 @@ CREATE FUNCTION ppe.create_schedule (
 ,   p_min_seconds_between_attempts INT
 ,   p_start_ts TIMESTAMPTZ(0) = '1900-01-01 +0'
 ,   p_end_ts TIMESTAMPTZ(0) = '9999-12-31 +0'
-,   p_start_month SMALLINT = 1
-,   p_end_month SMALLINT = 12
-,   p_start_month_day  SMALLINT = 1
-,   p_end_month_day SMALLINT = 31
-,   p_start_week_day SMALLINT = 1
-,   p_end_week_day SMALLINT = 7
-,   p_start_hour SMALLINT = 1
-,   p_end_hour SMALLINT = 23
-,   p_start_minute SMALLINT = 1
-,   p_end_minute SMALLINT = 59
+,   p_start_month INT = 1
+,   p_end_month INT = 12
+,   p_start_month_day  INT = 1
+,   p_end_month_day INT = 31
+,   p_start_week_day INT = 1
+,   p_end_week_day INT = 7
+,   p_start_hour INT = 1
+,   p_end_hour INT = 23
+,   p_start_minute INT = 1
+,   p_end_minute INT = 59
 )
 RETURNS INT
 AS $$

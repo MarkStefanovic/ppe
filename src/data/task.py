@@ -37,4 +37,4 @@ class Task:
                 retries:         {self.retries}
             ]
             """
-        )
+        ).strip()

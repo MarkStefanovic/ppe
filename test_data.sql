@@ -61,10 +61,10 @@ BEGIN
         SELECT * FROM ppe.create_schedule(
             p_schedule_name := 'Hourly During Work Hours'
         ,   p_min_seconds_between_attempts := 3600
-        ,   p_start_week_day := 1 -- start on Monday
-        ,   p_end_week_day := 5 -- end on Friday
-        ,   p_start_hour := 13 -- start at 6 AM LA time
-        ,   p_end_hour := 23 -- end at 5 PM LA time
+        ,   p_start_week_day := 1::SMALLINT -- start on Monday
+        ,   p_end_week_day := 5::SMALLINT -- end on Friday
+        ,   p_start_hour := 13::SMALLINT -- start at 6 AM LA time
+        ,   p_end_hour := 23::SMALLINT -- end at 5 PM LA time
         )
      );
 

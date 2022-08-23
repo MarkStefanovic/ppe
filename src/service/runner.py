@@ -9,8 +9,7 @@ import time
 import psycopg
 import typing
 
-from src import config, data
-from src.db import Db
+from src import adapter, data
 
 __all__ = ("Runner", "start")
 
@@ -20,9 +19,9 @@ logger = logging.getLogger()
 def start(
     *,
     job_queue: queue.Queue[data.Task],
-    db: Db,
-    max_simultaneous_jobs: int = config.max_simultaneous_jobs(),
-    connection_str: str = config.connection_string(),
+    db: adapter.db.Db,
+    max_simultaneous_jobs: int = adapter.config.max_simultaneous_jobs(),
+    connection_str: str = adapter.config.connection_string(),
 ) -> threading.Thread:
     logger.info("Starting job runner...")
 
@@ -41,10 +40,10 @@ class Runner:
     def __init__(
         self,
         *,
-        db: Db,
+        db: adapter.db.Db,
         task_queue: queue.Queue[data.Task],
-        max_simultaneous_jobs: int = config.max_simultaneous_jobs(),
-        connection_str: str = config.connection_string(),
+        max_simultaneous_jobs: int = adapter.config.max_simultaneous_jobs(),
+        connection_str: str = adapter.config.connection_string(),
     ):
         self._db = db
         self._task_queue = task_queue

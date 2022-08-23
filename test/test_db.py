@@ -1,8 +1,10 @@
-from src.db import Db
+from psycopg2.pool import ThreadedConnectionPool
+
+from src.adapter.db import open_db
 
 
-def test_cancel_running_jobs(db_fixture: Db):
-    with db_fixture._pool.connection() as con:  # noqa
+def test_cancel_running_jobs(pool_fixture: ThreadedConnectionPool):
+    with pool_fixture.getconn() as con:
         with con.cursor() as cur:
             cur.execute("""
                 INSERT INTO ppe.batch (batch_id) OVERRIDING SYSTEM VALUE VALUES (-1);
@@ -14,11 +16,12 @@ def test_cancel_running_jobs(db_fixture: Db):
             ppe_jobs = cur.fetchone()[0]
             assert ppe_jobs == 2, f"Expected 2 jobs in ppe.job, but there were {ppe_jobs}."
 
-    db_fixture.cancel_running_jobs(reason="Testing")
-    with db_fixture._pool.connection() as con:  # noqa
+    db = open_db(pool=pool_fixture)
+    db.cancel_running_jobs(reason="Testing")
+    with pool_fixture.getconn() as con:
         with con.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM ppe.job_cancel;")
             cancelled_jobs = cur.fetchone()[0]
-            assert cancelled_jobs == 2, f"Expected 1 job in ppe.job_cancel after cancel_running_jobs, but there were {cancelled_jobs}."
+            assert cancelled_jobs == 2, f"Expected 2 job in ppe.job_cancel after cancel_running_jobs, but there were {cancelled_jobs}."
 
 

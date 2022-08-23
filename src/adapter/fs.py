@@ -3,6 +3,8 @@ import os
 import pathlib
 import sys
 
+__all__ = ("config_path", "log_folder")
+
 
 @functools.lru_cache(maxsize=1)
 def _root_dir() -> pathlib.Path:
@@ -25,7 +27,3 @@ def config_path() -> pathlib.Path:
 @functools.lru_cache(maxsize=1)
 def log_folder() -> pathlib.Path:
     return _root_dir() / "logs"
-
-
-if __name__ == '__main__':
-    print(config_path())

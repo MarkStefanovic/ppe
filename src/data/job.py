@@ -26,4 +26,4 @@ class Job:
                     retries:         {self.task.retries}
                 ]
             ]
-        """)
+        """).strip()

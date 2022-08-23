@@ -9,6 +9,4 @@ dependencies:
 - pip
 - mypy
 - pytest
-- pip:
-  - psycopg[binary]
-  - psycopg_pool
+- psycopg2-binary
