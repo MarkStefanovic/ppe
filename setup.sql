@@ -435,18 +435,40 @@ END;
 $$
 LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION ppe.get_ready_tasks (
+CREATE TABLE ppe.latest_task_attempt (
+    task_id INT PRIMARY KEY REFERENCES ppe.task (task_id)
+,   job_id INT NOT NULL REFERENCES ppe.job (job_id)
+,   start_ts TIMESTAMPTZ(0) NOT NULL DEFAULT now()
+,   UNIQUE (job_id)
+);
+
+CREATE TABLE ppe.job_complete (
+    job_id INT PRIMARY KEY REFERENCES ppe.job (job_id)
+,   ts TIMESTAMPTZ(0) NOT NULL DEFAULT now()
+);
+
+CREATE TABLE ppe.task_running (
+    task_id INT PRIMARY KEY REFERENCES ppe.task (task_id)
+,   start_ts TIMESTAMPTZ(0) NOT NULL
+);
+
+CREATE TABLE ppe.task_queue (
+    task_id INT PRIMARY KEY REFERENCES ppe.task (task_id)
+,   task_name TEXT NOT NULL
+,   cmd TEXT[] NULL
+,   task_sql TEXT NULL
+,   retries INT NOT NULL
+,   timeout_seconds INT NOT NULL
+,   ts TIMESTAMPTZ(0) NOT NULL DEFAULT now()
+,   UNIQUE (task_name)
+);
+
+CREATE PROCEDURE ppe.update_queue (
     p_max_jobs INT
 )
-RETURNS TABLE (
-    task_id INT
-,   task_name TEXT
-,   cmd TEXT[]
-,   task_sql TEXT
-,   retries INT
-,   timeout_seconds INT
-)
+LANGUAGE plpgsql
 AS $$
+BEGIN
     WITH latest_attempts AS (
         SELECT DISTINCT ON (s.task_id)
             s.task_id
@@ -460,7 +482,25 @@ AS $$
             s.task_id
         ,   s.ts DESC
     )
-    , latest_completions AS (
+    INSERT INTO ppe.latest_task_attempt (
+        task_id
+    ,   job_id
+    ,   start_ts
+    )
+    SELECT
+        s.task_id
+    ,   s.job_id
+    ,   s.ts AS start_ts
+    FROM latest_attempts AS s
+    ON CONFLICT (task_id)
+    DO UPDATE SET
+        job_id = EXCLUDED.job_id
+    ,   start_ts = EXCLUDED.start_ts
+    WHERE
+        (ppe.latest_task_attempt.job_id, ppe.latest_task_attempt.start_ts) <> (EXCLUDED.job_id, EXCLUDED.start_ts)
+    ;
+
+    WITH latest_job_completions AS (
         SELECT
             t.job_id
         ,   t.ts
@@ -469,8 +509,8 @@ AS $$
                 f.job_id
             ,   f.ts
             FROM ppe.job_cancel AS f
-            JOIN latest_attempts AS la
-                ON f.job_id = la.job_id
+            JOIN ppe.latest_task_attempt AS lta
+                ON f.job_id = lta.job_id
 
             UNION ALL
 
@@ -478,8 +518,8 @@ AS $$
                 f.job_id
             ,   f.ts
             FROM ppe.job_failure AS f
-            JOIN latest_attempts AS la
-                ON f.job_id = la.job_id
+            JOIN ppe.latest_task_attempt AS lta
+                ON f.job_id = lta.job_id
 
             UNION ALL
 
@@ -487,8 +527,8 @@ AS $$
                 s.job_id
             ,   s.ts
             FROM ppe.job_success AS s
-            JOIN latest_attempts AS la
-                ON s.job_id = la.job_id
+            JOIN ppe.latest_task_attempt AS lta
+                ON s.job_id = lta.job_id
 
             UNION ALL
 
@@ -496,35 +536,92 @@ AS $$
                 s.job_id
             ,   s.ts
             FROM ppe.job_skip AS s
-            JOIN latest_attempts AS la
-                ON s.job_id = la.job_id
+            JOIN ppe.latest_task_attempt AS lta
+                ON s.job_id = lta.job_id
         ) AS t
         ORDER BY
             t.job_id
         ,   t.ts DESC
     )
-    , running_jobs AS (
-        SELECT
-            j.task_id
-        ,   j.job_id
-        FROM latest_attempts AS j
-        WHERE
-            EXTRACT(EPOCH FROM NOW() - j.ts) < (j.timeout_seconds + 10)
-            AND NOT EXISTS (
-                SELECT 1
-                FROM latest_completions AS lc
-                WHERE j.job_id = lc.job_id
-            )
+    INSERT INTO ppe.job_complete (
+        job_id
+    ,   ts
     )
-    , ready_tasks AS (
+    SELECT
+        ljc.job_id
+    ,   ljc.ts
+    FROM latest_job_completions AS ljc
+    ON CONFLICT (job_id)
+    DO UPDATE SET
+        ts = EXCLUDED.ts
+    WHERE
+        ppe.job_complete.ts <> EXCLUDED.ts
+    ;
+
+    TRUNCATE TABLE ppe.task_running;
+    WITH running_tasks AS (
+        SELECT
+            lta.task_id
+        ,   lta.start_ts
+        FROM ppe.latest_task_attempt AS lta
+        JOIN ppe.task AS t
+            ON lta.task_id = t.task_id
+        WHERE
+            NOT EXISTS (
+                SELECT 1
+                FROM ppe.job_complete AS jc
+                WHERE
+                    lta.job_id = jc.job_id
+            )
+            AND EXTRACT(EPOCH FROM now() - lta.start_ts) <= t.timeout_seconds
+    )
+    INSERT INTO ppe.task_running (
+        task_id
+    ,   start_ts
+    )
+    SELECT
+        rt.task_id
+    ,   rt.start_ts
+    FROM running_tasks AS rt;
+
+    DELETE FROM ppe.task_queue AS tq
+    WHERE
+        NOT EXISTS (
+            SELECT 1
+            FROM ppe.task AS t
+            JOIN ppe.task_schedule AS ts
+                ON t.task_id = ts.task_id
+            JOIN ppe.schedule AS s
+                ON ts.schedule_id = s.schedule_id
+            WHERE
+                tq.task_id = t.task_id
+                AND now() BETWEEN s.start_ts AND s.end_ts
+                AND EXTRACT(MONTH FROM now()) BETWEEN s.start_month AND s.end_month
+                AND EXTRACT(ISODOW FROM now()) BETWEEN s.start_week_day AND s.end_week_day
+                AND EXTRACT(DAY FROM now()) BETWEEN s.start_month_day AND s.end_month_day
+                AND EXTRACT(HOUR FROM now()) BETWEEN s.start_hour AND s.end_hour
+                AND EXTRACT(MINUTE FROM now()) BETWEEN s.start_minute AND s.end_minute
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM ppe.task_running AS tr
+            WHERE tq.task_id = tr.task_id
+        )
+    ;
+
+    IF (SELECT COUNT(*) FROM ppe.task_queue) > p_max_jobs THEN
+        RETURN;
+    END IF;
+
+    WITH ready_tasks AS (
         SELECT DISTINCT ON (t.task_id)
             t.task_id
         ,   t.task_name
         ,   t.cmd
         ,   t.task_sql
         ,   t.retries
-        ,   la.ts AS latest_attempt
-        ,   EXTRACT(EPOCH FROM now() - la.ts) AS seconds_since_latest_attempt
+        ,   lta.start_ts AS latest_attempt
+        ,   EXTRACT(EPOCH FROM now() - lta.start_ts) AS seconds_since_latest_attempt
         ,   s.min_seconds_between_attempts
         ,   t.timeout_seconds
         FROM ppe.task AS t
@@ -532,10 +629,10 @@ AS $$
             ON t.task_id = ts.task_id
         JOIN ppe.schedule AS s
              ON ts.schedule_id = s.schedule_id
-        LEFT JOIN latest_attempts AS la
-            ON t.task_id = la.task_id
-        LEFT JOIN latest_completions AS lc
-            ON la.job_id = lc.job_id
+        LEFT JOIN ppe.latest_task_attempt AS lta
+            ON t.task_id = lta.task_id
+        LEFT JOIN ppe.job_complete AS ltc
+            ON lta.job_id = ltc.job_id
         WHERE
             t.enabled
             AND now() BETWEEN s.start_ts AND s.end_ts
@@ -547,24 +644,24 @@ AS $$
             AND (
                 NOT EXISTS (
                     SELECT 1
-                    FROM running_jobs AS rj
-                    WHERE la.task_id = rj.task_id
+                    FROM ppe.task_running AS tr
+                    WHERE lta.task_id = tr.task_id
                 )
-                OR EXTRACT(EPOCH FROM now() - la.ts) > t.timeout_seconds + 10
+                OR EXTRACT(EPOCH FROM now() - lta.start_ts) > t.timeout_seconds + 60
             )
             AND (
-                EXTRACT(EPOCH FROM now() - lc.ts) > s.min_seconds_between_attempts
-                OR lc.job_id IS NULL
+                EXTRACT(EPOCH FROM now() - ltc.ts) > s.min_seconds_between_attempts
+                OR ltc.job_id IS NULL
             )
         ORDER BY
             t.task_id
-        ,   la.ts DESC
+        ,   lta.start_ts DESC
     )
     , running_job_resources AS (
         SELECT
             tr.resource_id
         ,   SUM(tr.units) AS units_in_use
-        FROM running_jobs AS rj
+        FROM ppe.task_running AS rj
         JOIN ppe.task_resource AS tr
             ON rj.task_id = tr.task_id
         GROUP BY
@@ -590,6 +687,14 @@ AS $$
             ON rt.task_id = tr.task_id
             AND tr.resource_id = ar.resource_id
     )
+    INSERT INTO ppe.task_queue (
+        task_id
+    ,   task_name
+    ,   cmd
+    ,   task_sql
+    ,   retries
+    ,   timeout_seconds
+    )
     SELECT
         rt.task_id
     ,   rt.task_name
@@ -609,13 +714,44 @@ AS $$
         hours_since_last_attempt
     ,   factor
     )
-    ORDER BY
-        c.hours_since_last_attempt DESC
-    ,   c.factor DESC
-    ,   rt.latest_attempt
-    LIMIT GREATEST((p_max_jobs - (SELECT COUNT(*) FROM running_jobs)), 0);
-$$
-LANGUAGE sql;
+    WHERE
+        NOT EXISTS (
+            SELECT 1
+            FROM ppe.task_queue AS q
+            WHERE rt.task_id = q.task_id
+        )
+    ;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION ppe.get_ready_tasks (
+    p_max_jobs INT
+)
+RETURNS TABLE (
+    task_id INT
+,   task_name TEXT
+,   cmd TEXT[]
+,   task_sql TEXT
+,   retries INT
+,   timeout_seconds INT
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    CALL ppe.update_queue(p_max_jobs := p_max_jobs);
+
+    RETURN QUERY
+    SELECT
+        q.task_id
+    ,   q.task_name
+    ,   q.cmd
+    ,   q.task_sql
+    ,   q.retries
+    ,   q.timeout_seconds
+    FROM ppe.task_queue AS q
+    LIMIT (p_max_jobs);
+END;
+$$;
 
 CREATE OR REPLACE FUNCTION ppe.delete_old_log_entries(
     p_days_to_keep INT = 3

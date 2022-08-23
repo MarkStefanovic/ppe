@@ -2,32 +2,25 @@ from __future__ import annotations
 
 import abc
 import contextlib
-import functools
-import logging
 import textwrap
 
+import loguru
 import psycopg2.pool
-import typing
 from psycopg2._psycopg import connection
-from psycopg2.extras import DictRow
 
 from src import data
 from src.adapter import config
 
-__all__ = ("Db", "open_db")
-
-logger = logging.getLogger()
+__all__ = ("create_pool", "Db", "open_db")
 
 
-@functools.lru_cache(maxsize=1)
-def _create_pool(
+def create_pool(
     *,
-    connection_string: str = config.connection_string(),
-    min_size: int = 3,
-    max_size: int = 10,
+    connection_string: str = config.get_connection_string(),
+    max_size: int = config.get_max_connections(),
 ) -> psycopg2.pool.ThreadedConnectionPool:
     return psycopg2.pool.ThreadedConnectionPool(
-        min_size,
+        3,
         max_size,
         dsn=connection_string,
     )
@@ -35,21 +28,21 @@ def _create_pool(
 
 # noinspection PyBroadException
 @contextlib.contextmanager
-def _connect(*, pool: psycopg2.pool.ThreadedConnectionPool = _create_pool()) -> connection:
+def _connect(*, pool: psycopg2.pool.ThreadedConnectionPool) -> connection:
     con = pool.getconn()
     try:
         yield con
     except BaseException:
         con.rollback()
+        raise
     else:
         con.commit()
     finally:
         pool.putconn(con)
 
 
-@functools.lru_cache(maxsize=1)
-def open_db(*, pool: psycopg2.pool.ThreadedConnectionPool = _create_pool()) -> Db:
-    logger.info("Opening database...")
+def open_db(*, pool: psycopg2.pool.ThreadedConnectionPool) -> Db:
+    loguru.logger.info("Opening database...")
 
     return _Db(pool=pool)
 
@@ -93,7 +86,7 @@ class _Db(Db):
 
     def cancel_running_jobs(self, *, reason: str) -> None:
         sql = "CALL ppe.cancel_running_jobs(p_reason := %(reason)s);"
-        with _connect(pool=self._pool) as con:
+        with self._pool.getconn() as con:
             with con.cursor() as cur:
                 cur.execute(sql, {"reason": reason})
 
@@ -118,7 +111,17 @@ class _Db(Db):
         return data.Job(job_id=job_id, batch_id=self._batch_id, task=task)
 
     def get_ready_tasks(self, /, n: int) -> list[data.Task]:
-        sql = textwrap.dedent("""
+        # sql = textwrap.dedent("""
+        #     SELECT
+        #         t.task_id
+        #     ,   t.task_name
+        #     ,   t.cmd
+        #     ,   t.task_sql
+        #     ,   t.retries
+        #     ,   t.timeout_seconds
+        #     FROM ppe.get_ready_tasks(p_max_jobs := %(n)s) AS t;
+        # """)
+        sql = """
             SELECT
                 t.task_id
             ,   t.task_name
@@ -126,22 +129,23 @@ class _Db(Db):
             ,   t.task_sql
             ,   t.retries
             ,   t.timeout_seconds
-            FROM ppe.get_ready_tasks(p_max_jobs := 5) AS t;
-        """)
+            FROM ppe.task_queue AS t
+            LIMIT %(n)s
+        """
         with _connect(pool=self._pool) as con:
-            with con.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            with con.cursor() as cur:
                 cur.execute(sql, {"n": n})
-                row: dict[str, typing.Any]
+                result = cur.fetchall()
                 return [
                     data.Task(
-                        task_id=row["task_id"],
-                        name=row["task_name"],
-                        cmd=row["cmd"],
-                        sql=row["task_sql"],
-                        retries=row["retries"],
-                        timeout_seconds=row["timeout_seconds"],
+                        task_id=row[0],
+                        name=row[1],
+                        cmd=row[2],
+                        sql=row[3],
+                        retries=row[4],
+                        timeout_seconds=row[5],
                     )
-                    for row in cur.fetchall()
+                    for row in result
                 ]
 
     def log_batch_error(self, *, error_message: str) -> None:
@@ -173,6 +177,6 @@ class _Db(Db):
 
 
 if __name__ == '__main__':
-    d = open_db()
+    d = open_db(pool=create_pool())
     for t in d.get_ready_tasks(n=5):
         print(t)
