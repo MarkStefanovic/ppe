@@ -48,7 +48,9 @@ def test_update_queue(pool_fixture: ThreadedConnectionPool):
         with con.cursor() as cur:
             cur.execute("""
                 INSERT INTO ppe.batch (batch_id) OVERRIDING SYSTEM VALUE VALUES (1);
-                INSERT INTO ppe.task (task_id, task_name, task_sql, retries, timeout_seconds) OVERRIDING SYSTEM VALUE VALUES (1, 'test_task', 'SELECT 1', 1, 60);
+                INSERT INTO ppe.task (task_id, task_name, task_sql, retries, timeout_seconds, enabled) OVERRIDING SYSTEM VALUE VALUES (1, 'test_task', 'SELECT 1', 1, 60, TRUE);
+                INSERT INTO ppe.resource (resource_id, resource_name, capacity, enable_flag) OVERRIDING SYSTEM VALUE VALUES (1, 'db', 3, TRUE);
+                INSERT INTO ppe.task_resource(task_id, resource_id, units) OVERRIDING SYSTEM VALUE VALUES (1, 1, 1);
                 INSERT INTO ppe.schedule (schedule_id, schedule_name, min_seconds_between_attempts) OVERRIDING SYSTEM VALUE VALUES (1, 'every 10 seconds', 10);
                 INSERT INTO ppe.task_schedule (task_id, schedule_id) VALUES (1, 1);
             """)
