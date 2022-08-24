@@ -1,5 +1,8 @@
 {
   "connection-string": "host='localhost' dbname='testdb' user='postgres' password='secret'",
   "max-simultaneous-jobs": 5,
-  "max-connections": 6
+  "max-connections": 6,
+  "get-seconds-between-updates": 10,
+  "get-seconds-between-cleanups":  1800,
+  "days-logs-to-keep": 3
 }

@@ -260,17 +260,35 @@ CREATE TABLE ppe.job (
 CREATE INDEX ix_job_task_id_ts ON ppe.job (task_id, ts DESC);
 CREATE INDEX ix_job_batch_id ON ppe.job (batch_id);
 
-CREATE FUNCTION ppe.create_job (
+CREATE OR REPLACE FUNCTION ppe.create_job (
     p_batch_id INT
 ,   p_task_id INT
 )
-    RETURNS INT
+RETURNS INT
+LANGUAGE plpgsql
 AS $$
-    INSERT INTO ppe.job (batch_id, task_id)
-    VALUES (p_batch_id, p_task_id)
-    RETURNING job_id;
-$$
-LANGUAGE sql;
+DECLARE
+    v_job_id INT;
+BEGIN
+    ASSERT p_batch_id IS NOT NULL, 'p_batch_id cannot be null.';
+    ASSERT p_task_id > 0, 'p_task_id must be >= 0.';
+
+    DELETE FROM ppe.task_queue AS q WHERE q.task_id = p_task_id;
+
+    WITH ins AS (
+        INSERT INTO ppe.job (batch_id, task_id)
+        VALUES (p_batch_id, p_task_id)
+        RETURNING job_id
+    )
+    SELECT job_id
+    INTO v_job_id
+    FROM ins;
+
+    ASSERT v_job_id IS NOT NULL;
+
+    RETURN v_job_id;
+END;
+$$;
 
 CREATE TABLE ppe.batch_error (
     id SERIAL PRIMARY KEY
@@ -459,13 +477,12 @@ CREATE TABLE ppe.task_queue (
 ,   task_sql TEXT NULL
 ,   retries INT NOT NULL
 ,   timeout_seconds INT NOT NULL
+,   latest_attempt_ts TIMESTAMPTZ(0) NULL
 ,   ts TIMESTAMPTZ(0) NOT NULL DEFAULT now()
 ,   UNIQUE (task_name)
 );
 
-CREATE PROCEDURE ppe.update_queue (
-    p_max_jobs INT
-)
+CREATE OR REPLACE PROCEDURE ppe.update_queue ()
 LANGUAGE plpgsql
 AS $$
 BEGIN
@@ -584,35 +601,7 @@ BEGIN
     ,   rt.start_ts
     FROM running_tasks AS rt;
 
-    DELETE FROM ppe.task_queue AS tq
-    WHERE
-        NOT EXISTS (
-            SELECT 1
-            FROM ppe.task AS t
-            JOIN ppe.task_schedule AS ts
-                ON t.task_id = ts.task_id
-            JOIN ppe.schedule AS s
-                ON ts.schedule_id = s.schedule_id
-            WHERE
-                tq.task_id = t.task_id
-                AND now() BETWEEN s.start_ts AND s.end_ts
-                AND EXTRACT(MONTH FROM now()) BETWEEN s.start_month AND s.end_month
-                AND EXTRACT(ISODOW FROM now()) BETWEEN s.start_week_day AND s.end_week_day
-                AND EXTRACT(DAY FROM now()) BETWEEN s.start_month_day AND s.end_month_day
-                AND EXTRACT(HOUR FROM now()) BETWEEN s.start_hour AND s.end_hour
-                AND EXTRACT(MINUTE FROM now()) BETWEEN s.start_minute AND s.end_minute
-        )
-        OR EXISTS (
-            SELECT 1
-            FROM ppe.task_running AS tr
-            WHERE tq.task_id = tr.task_id
-        )
-    ;
-
-    IF (SELECT COUNT(*) FROM ppe.task_queue) > p_max_jobs THEN
-        RETURN;
-    END IF;
-
+    TRUNCATE ppe.task_queue;
     WITH ready_tasks AS (
         SELECT DISTINCT ON (t.task_id)
             t.task_id
@@ -624,6 +613,7 @@ BEGIN
         ,   EXTRACT(EPOCH FROM now() - lta.start_ts) AS seconds_since_latest_attempt
         ,   s.min_seconds_between_attempts
         ,   t.timeout_seconds
+        ,   lta.start_ts AS latest_attempt_ts
         FROM ppe.task AS t
         JOIN ppe.task_schedule AS ts -- 1..m
             ON t.task_id = ts.task_id
@@ -694,6 +684,7 @@ BEGIN
     ,   task_sql
     ,   retries
     ,   timeout_seconds
+    ,   latest_attempt_ts
     )
     SELECT
         rt.task_id
@@ -702,31 +693,15 @@ BEGIN
     ,   rt.task_sql
     ,   rt.retries
     ,   rt.timeout_seconds
+    ,   rt.latest_attempt_ts
     FROM ready_tasks AS rt
     JOIN ready_jobs_with_available_resources AS rjwar
         ON rt.task_id = rjwar.task_id
-    , LATERAL (
-        VALUES (
-            rt.seconds_since_latest_attempt/3600
-        ,   rt.seconds_since_latest_attempt::float/rt.min_seconds_between_attempts
-        )
-    ) AS c (
-        hours_since_last_attempt
-    ,   factor
-    )
-    WHERE
-        NOT EXISTS (
-            SELECT 1
-            FROM ppe.task_queue AS q
-            WHERE rt.task_id = q.task_id
-        )
     ;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION ppe.get_ready_tasks (
-    p_max_jobs INT
-)
+CREATE OR REPLACE FUNCTION ppe.get_ready_task ()
 RETURNS TABLE (
     task_id INT
 ,   task_name TEXT
@@ -737,132 +712,113 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    v_task_id INT;
 BEGIN
-    CALL ppe.update_queue(p_max_jobs := p_max_jobs);
+    v_task_id = (
+        SELECT
+            q.task_id
+        FROM ppe.task_queue AS q
+        ORDER BY
+            q.latest_attempt_ts
+        ,   q.ts
+        ,   random()
+        LIMIT 1
+    );
 
-    RETURN QUERY
-    SELECT
-        q.task_id
-    ,   q.task_name
-    ,   q.cmd
-    ,   q.task_sql
-    ,   q.retries
-    ,   q.timeout_seconds
-    FROM ppe.task_queue AS q
-    LIMIT (p_max_jobs);
+    IF v_task_id IS NOT NULL THEN
+        DELETE FROM ppe.task_queue AS q
+        WHERE q.task_id = v_task_id;
+
+        RETURN QUERY
+        SELECT
+            t.task_id
+        ,   t.task_name
+        ,   t.cmd
+        ,   t.task_sql
+        ,   t.retries
+        ,   t.timeout_seconds
+        FROM ppe.task AS t
+        WHERE
+            t.task_id = v_task_id;
+    END IF;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION ppe.delete_old_log_entries(
-    p_days_to_keep INT = 3
+CREATE OR REPLACE PROCEDURE ppe.delete_old_log_entries(
+    p_current_batch_id INT
+,   p_days_to_keep INT = 3
 )
-RETURNS BIGINT
 AS $$
-    DECLARE
-        v_cutoff TIMESTAMPTZ(0) = now() - make_interval(days := COALESCE(p_days_to_keep, 3));
-        v_rows_deleted BIGINT := 0;
-    BEGIN
-        RAISE NOTICE 'v_cutoff: %', v_cutoff;
+DECLARE
+    v_cutoff TIMESTAMPTZ(0) = now() - make_interval(days := COALESCE(p_days_to_keep, 3));
+BEGIN
+    RAISE NOTICE 'v_cutoff: %', v_cutoff;
 
-        WITH batches AS (
-            DELETE FROM ppe.batch AS b
-            WHERE
-                b.ts < v_cutoff
-                -- don't delete the most recent batch
-                AND EXISTS (
-                    SELECT 1
-                    FROM ppe.batch AS b
-                    WHERE b.ts > b.ts
-                )
-            RETURNING batch_id
-        )
-        , batch_error AS (
-            DELETE FROM ppe.batch_error AS b
-            WHERE
-                EXISTS (
-                    SELECT 1
-                    FROM batches AS d
-                    WHERE
-                        b.batch_id = d.batch_id
-                )
-                OR b.ts < v_cutoff
-            RETURNING batch_id
-        )
-        , batch_info AS (
-            DELETE FROM ppe.batch_info AS b
-            WHERE
-                EXISTS (
-                    SELECT 1
-                    FROM batches AS d
-                    WHERE
-                        b.batch_id = d.batch_id
-                )
-                OR b.ts < v_cutoff
-            RETURNING batch_id
-        )
-        , jobs AS (
-            DELETE FROM ppe.job AS j
-            WHERE
-                j.ts < v_cutoff
-                OR EXISTS (
-                    SELECT 1
-                    FROM batches AS b
-                    WHERE j.batch_id = b.batch_id
-                )
-            RETURNING job_id
-        )
-        , job_failures AS (
-            DELETE FROM ppe.job_failure AS f
-            WHERE
-                EXISTS (
-                    SELECT 1
-                    FROM jobs AS j
-                    WHERE f.job_id = j.job_id
-                )
-            RETURNING 1
-        )
-        , job_skips AS (
-            DELETE FROM ppe.job_skip AS s
-            WHERE
-                EXISTS (
-                    SELECT 1
-                    FROM jobs AS j
-                    WHERE s.job_id = j.job_id
-                )
-            RETURNING 1
-        )
-        , job_successes AS (
-            DELETE FROM ppe.job_success AS s
-            WHERE
-                EXISTS (
-                    SELECT 1
-                    FROM jobs AS j
-                    WHERE s.job_id = j.job_id
-                )
-            RETURNING 1
-        )
-        , job_infos AS (
-            DELETE FROM ppe.job_info AS i
-            WHERE
-                EXISTS (
-                    SELECT 1
-                    FROM jobs AS j
-                    WHERE i.job_id = j.job_id
-                )
-            RETURNING 1
-        )
-        SELECT
-            (SELECT COUNT(*) FROM batches)
-        +   (SELECT COUNT(*) FROM batch_error)
-        +   (SELECT COUNT(*) FROM batch_info)
-        +   (SELECT COUNT(*) FROM jobs)
-        +   (SELECT COUNT(*) FROM job_failures)
-        +   (SELECT COUNT(*) FROM job_skips)
-        +   (SELECT COUNT(*) FROM job_successes)
-        +   (SELECT COUNT(*) FROM job_infos)
-        INTO v_rows_deleted;
+    DELETE FROM ppe.batch AS b
+    WHERE b.batch_id <> p_current_batch_id AND b.ts < v_cutoff;
 
-        RETURN v_rows_deleted;
-    END;
+    DELETE FROM ppe.batch_error AS be
+    WHERE NOT EXISTS(SELECT 1 FROM ppe.batch AS b WHERE be.batch_id = b.batch_id);
+
+    DELETE FROM ppe.batch_info AS bi
+    WHERE NOT EXISTS(SELECT 1 FROM ppe.batch AS b WHERE bi.batch_id = b.batch_id);
+
+    DELETE FROM ppe.job AS j
+    WHERE NOT EXISTS(SELECT 1 FROM ppe.batch AS b WHERE j.batch_id = b.batch_id);
+
+    DELETE FROM ppe.job AS j
+    WHERE
+        NOT EXISTS(
+            SELECT 1
+            FROM ppe.batch AS b
+            WHERE j.batch_id = b.batch_id
+        )
+    ;
+
+    DELETE FROM ppe.job_info AS ji
+    USING ppe.job AS j
+    WHERE
+        ji.job_id = j.job_id
+        AND NOT EXISTS(
+            SELECT 1
+            FROM ppe.batch AS b
+            WHERE j.batch_id = b.batch_id
+        )
+    ;
+
+    DELETE FROM ppe.job_failure AS jf
+    USING ppe.job AS j
+    WHERE
+        jf.job_id = j.job_id
+        AND NOT EXISTS(
+            SELECT 1
+            FROM ppe.batch AS b
+            WHERE j.batch_id = b.batch_id
+        )
+    ;
+
+    DELETE FROM ppe.job_skip AS js
+    USING ppe.job AS j
+    WHERE
+        js.job_id = j.job_id
+        AND NOT EXISTS(
+            SELECT 1
+            FROM ppe.batch AS b
+            WHERE j.batch_id = b.batch_id
+        )
+    ;
+
+    DELETE FROM ppe.job_success AS js
+    USING ppe.job AS j
+    WHERE
+        js.job_id = j.job_id
+        AND NOT EXISTS(
+            SELECT 1
+            FROM ppe.batch AS b
+            WHERE j.batch_id = b.batch_id
+        )
+    ;
+END;
 $$
 LANGUAGE plpgsql;

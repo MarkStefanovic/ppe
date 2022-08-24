@@ -1,29 +1,35 @@
 import logging
-import queue
 import sys
 
 import loguru
 
-from src import adapter, data, service
+from src import adapter, service
 
 
 def main(
     *,
-    connection_string = adapter.config.get_connection_string(),
-    max_connections: int = adapter.config.get_max_connections(),
-    max_jobs: int = adapter.config.get_max_simultaneous_jobs(),
+    connection_str: str,
+    max_connections: int,
+    max_jobs: int,
+    seconds_between_updates: int,
+    seconds_between_cleanups: int,
+    days_logs_to_keep: int,
 ) -> None:
     try:
-        job_queue: queue.Queue[data.Task] = queue.Queue(max_jobs)
+        pool = adapter.db.create_pool(connection_str=connection_str, max_size=max_connections)
 
-        pool = adapter.db.create_pool(connection_string=connection_string, max_size=max_connections)
+        db = adapter.db.open_db(pool=pool, days_logs_to_keep=days_logs_to_keep)
 
-        db = adapter.db.open_db(pool=pool)
+        db.cancel_running_jobs(reason="A new batch was started.")
 
-        scheduler_thread = service.scheduler.start(job_queue=job_queue, db=db)
+        scheduler_thread = service.scheduler.start(
+            db=db,
+            seconds_between_updates=seconds_between_updates,
+            seconds_between_cleanups=seconds_between_cleanups,
+        )
 
         job_runners = [
-            service.runner.start(db=db, job_queue=job_queue, max_simultaneous_jobs=max_jobs)
+            service.runner.start(db=db, connection_str=connection_str)
             for _ in range(max_jobs)
         ]
 
@@ -37,7 +43,6 @@ def main(
 
 if __name__ == '__main__':
     adapter.fs.log_folder().mkdir(exist_ok=True)
-    logging.basicConfig(level=logging.INFO)
 
     loguru.logger.add(adapter.fs.log_folder() / "error.log", rotation="5 MB", retention="7 days", level="ERROR")
 
@@ -45,7 +50,17 @@ if __name__ == '__main__':
         loguru.logger.add(sys.stderr, format="{time} {level} {message}", level=logging.DEBUG)
 
     loguru.logger.info("Starting ppe...")
-    main(max_jobs=adapter.config.get_max_simultaneous_jobs())
+
+    config_file = adapter.fs.config_path()
+    main(
+        connection_str=adapter.config.get_connection_str(config_file=config_file),
+        max_connections=adapter.config.get_max_connections(config_file=config_file),
+        max_jobs=adapter.config.get_max_simultaneous_jobs(config_file=config_file),
+        seconds_between_updates=adapter.config.get_seconds_between_updates(config_file=config_file),
+        seconds_between_cleanups=adapter.config.get_seconds_between_cleanups(config_file=config_file),
+        days_logs_to_keep=adapter.config.get_days_logs_to_keep(config_file=config_file),
+    )
+
     loguru.logger.error("ppe stopped somehow.")
 
     sys.exit(-1)

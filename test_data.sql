@@ -10,6 +10,10 @@ TRUNCATE TABLE ppe.job_success CASCADE;
 TRUNCATE TABLE ppe.schedule CASCADE;
 TRUNCATE TABLE ppe.task CASCADE;
 TRUNCATE TABLE ppe.task_schedule CASCADE;
+TRUNCATE TABLE ppe.task_running CASCADE;
+TRUNCATE TABLE ppe.task_queue CASCADE;
+TRUNCATE TABLE ppe.job_complete CASCADE;
+TRUNCATE TABLE ppe.latest_task_attempt CASCADE;
 
 DO $$
 DECLARE
@@ -87,8 +91,6 @@ BEGIN
     CALL ppe.log_batch_info(p_batch_id := v_batch_id, p_message := 'Test Batch Informative Message');
     CALL ppe.log_batch_error(p_batch_id := v_batch_id, p_message := 'Test Batch Error Message');
 
-    v_deleted_log_entries = (SELECT * FROM ppe.delete_old_log_entries(p_days_to_keep := 3));
-
     RAISE NOTICE 'v_task_1_id: %', v_task_1_id;
     RAISE NOTICE 'v_task_2_id: %', v_task_2_id;
     RAISE NOTICE 'v_task_3_id: %', v_task_3_id;
@@ -102,11 +104,10 @@ BEGIN
 END;
 $$;
 
-SELECT
-    t.task_id
-,   t.task_name
-,   t.cmd
-,   t.task_sql
-,   t.retries
-,   t.timeout_seconds
-FROM ppe.get_ready_tasks(p_max_jobs := 5) AS t;
+CALL ppe.update_queue();
+
+SELECT * FROM ppe.task_queue;
+
+
+-- SELECT * FROM ppe.get_ready_task();
+-- SELECT * FROM ppe.task_running;

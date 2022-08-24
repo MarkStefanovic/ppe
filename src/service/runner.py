@@ -11,79 +11,65 @@ import psycopg
 
 from src import adapter, data
 
-__all__ = ("Runner", "start")
+__all__ = ("start",)
 
 
-def start(
-    *,
-    job_queue: queue.Queue[data.Task],
-    db: adapter.db.Db,
-    max_simultaneous_jobs: int = adapter.config.get_max_simultaneous_jobs(),
-    connection_str: str = adapter.config.get_connection_string(),
-) -> threading.Thread:
+def start(*, db: adapter.db.Db, connection_str: str) -> threading.Thread:
     loguru.logger.info("Starting job runner...")
 
-    job_runner = Runner(
-        db=db,
-        task_queue=job_queue,
-        max_simultaneous_jobs=max_simultaneous_jobs,
-        connection_str=connection_str,
+    th = threading.Thread(
+        name="runner",
+        target=run,
+        kwargs={
+            "db": db,
+            "connection_str": connection_str,
+        },
+        daemon=True,
     )
-    th = threading.Thread(name="runner", target=job_runner.run, daemon=True)
     th.start()
     return th
 
 
-class Runner:
-    def __init__(
-        self,
-        *,
-        db: adapter.db.Db,
-        task_queue: queue.Queue[data.Task],
-        max_simultaneous_jobs: int = adapter.config.get_max_simultaneous_jobs(),
-        connection_str: str = adapter.config.get_connection_string(),
-    ):
-        self._db = db
-        self._task_queue = task_queue
-        self._max_simultaneous_jobs = max_simultaneous_jobs
-        self._connection_str = connection_str
-
-    def run(self) -> None:
-        while True:
-            try:
-                task = self._task_queue.get_nowait()
-                job = self._db.create_job(task=task)
+def run(*, db: adapter.db.Db, connection_str: str) -> None:
+    while True:
+        try:
+            job = db.get_ready_job()
+            if job is not None:
                 loguru.logger.info(f"Starting [{job.task.name}]...")
+
                 result = _run_job_with_retry(
-                    connection_str=self._connection_str,
+                    connection_str=connection_str,
                     job=job,
                     retries_so_far=0,
                 )
-                if result.is_err:
-                    loguru.logger.info(f"[{job.task.name}] failed: {result.error_message}.")
-                else:
-                    loguru.logger.info(f"[{job.task.name}] completed successfully.")
-                self._add_result(result=result)
-            except queue.Empty:
-                loguru.logger.debug("Queue is empty")
-            except Exception as e:
-                loguru.logger.exception(e)
-                self._db.log_batch_error(error_message=str(e))
 
-            time.sleep(1)
+                _add_result(db=db, result=result)
+        except queue.Empty:
+            loguru.logger.debug("Queue is empty")
+        except Exception as e:
+            loguru.logger.exception(e)
+            db.log_batch_error(error_message=str(e))
+            raise
 
-    def _add_result(self, *, result: data.JobResult) -> None:
-        if result.is_err:
-            self._db.log_job_error(
-                job_id=result.job.job_id,
-                return_code=result.return_code or -1,
-                error_message=result.error_message or "No error message was provided.",
-            )
-        else:
-            self._db.log_job_success(
-                job_id=result.job.job_id,
-                execution_millis=typing.cast(int, result.execution_millis),
-            )
+        time.sleep(1)
+
+
+def _add_result(*, db: adapter.db.Db, result: data.JobResult) -> None:
+    if result.is_err:
+        loguru.logger.info(f"[{result.job.task.name}] failed: {result.error_message}.")
+
+        db.log_job_error(
+            job_id=result.job.job_id,
+            return_code=result.return_code or -1,
+            error_message=result.error_message or "No error message was provided.",
+        )
+    else:
+        loguru.logger.info(f"[{result.job.task.name}] completed successfully.")
+
+        db.log_job_success(
+            job_id=result.job.job_id,
+            execution_millis=typing.cast(int, result.execution_millis),
+        )
 
 
 def _run_job_with_retry(*, connection_str: str, job: data.Job, retries_so_far: int = 0) -> data.JobResult:
@@ -93,13 +79,21 @@ def _run_job_with_retry(*, connection_str: str, job: data.Job, retries_so_far: i
         if result.is_err:
             if job.task.retries > retries_so_far:
                 loguru.logger.info(f"Retrying [{job.task.name}] ({retries_so_far + 1}/{job.task.retries})...")
-                return _run_job_with_retry(connection_str=connection_str, job=job, retries_so_far=retries_so_far + 1)
+                return _run_job_with_retry(
+                    connection_str=connection_str,
+                    job=job,
+                    retries_so_far=retries_so_far + 1,
+                )
             return result
         return result
     except Exception as e:
         if job.task.retries > retries_so_far:
             loguru.logger.info(f"Retrying [{job.task.name}] ({retries_so_far + 1}/{job.task.retries})...")
-            return _run_job_with_retry(connection_str=connection_str, job=job, retries_so_far=retries_so_far + 1)
+            return _run_job_with_retry(
+                connection_str=connection_str,
+                job=job,
+                retries_so_far=retries_so_far + 1,
+            )
         return data.JobResult.error(job=job, code=-1, message=str(e), retries=retries_so_far)
     finally:
         loguru.logger.debug(f"[{job.task.name}] finished.")
@@ -115,7 +109,12 @@ def _run_job_in_process(*, connection_str: str, job: data.Job, retries: int) -> 
         return result
     except queue.Empty:
         loguru.logger.error(f"[{job.task.name}] timed out after {job.task.timeout_seconds} seconds.")
-        return data.JobResult.error(job=job, code=-1, message=f"[{job.task.name}] timed out after {job.task.timeout_seconds} seconds.", retries=retries)
+        return data.JobResult.error(
+            job=job,
+            code=-1,
+            message=f"[{job.task.name}] timed out after {job.task.timeout_seconds} seconds.",
+            retries=retries,
+        )
     except Exception as e:
         loguru.logger.exception(e)
         return data.JobResult.error(job=job, code=-1, message=str(e), retries=retries)
@@ -123,7 +122,13 @@ def _run_job_in_process(*, connection_str: str, job: data.Job, retries: int) -> 
         result_queue.close()
 
 
-def _run(job: data.Job, connection_str: str, result_queue: "mp.Queue[data.JobResult]", retries: int, /) -> None:
+def _run(
+    job: data.Job,
+    connection_str: str,
+    result_queue: "mp.Queue[data.JobResult]",
+    retries: int,
+    /,
+) -> None:
     if job.task.cmd:
         _run_cmd(job=job, result_queue=result_queue, retries=retries)
     else:
@@ -133,12 +138,26 @@ def _run(job: data.Job, connection_str: str, result_queue: "mp.Queue[data.JobRes
 def _run_cmd(*, job: data.Job, result_queue: "mp.Queue[data.JobResult]", retries: int) -> None:
     start = datetime.datetime.now()
 
-    result = data.JobResult.error(job=job, code=-1, message=f"[{job.task.name}] never ran.", retries=retries)
+    result = data.JobResult.error(
+        job=job,
+        code=-1,
+        message=f"[{job.task.name}] never ran.",
+        retries=retries,
+    )
     try:
-        proc_result = subprocess.run(typing.cast(list[str], job.task.cmd), capture_output=True, timeout=job.task.timeout_seconds)
+        proc_result = subprocess.run(
+            typing.cast(list[str], job.task.cmd),
+            capture_output=True,
+            timeout=job.task.timeout_seconds,
+        )
         execution_millis = int((datetime.datetime.now() - start).total_seconds() * 1000)
         if proc_result.returncode:
-            result = data.JobResult.error(job=job, code=proc_result.returncode, message=str(proc_result.stderr), retries=retries)
+            result = data.JobResult.error(
+                job=job,
+                code=proc_result.returncode,
+                message=str(proc_result.stderr),
+                retries=retries,
+            )
         else:
             result = data.JobResult.success(job=job, execution_millis=execution_millis, retries=retries)
     except Exception as e:

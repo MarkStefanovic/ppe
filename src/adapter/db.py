@@ -2,28 +2,23 @@ from __future__ import annotations
 
 import abc
 import contextlib
-import textwrap
+import threading
 
 import loguru
 import psycopg2.pool
 from psycopg2._psycopg import connection
 
 from src import data
-from src.adapter import config
 
 __all__ = ("create_pool", "Db", "open_db")
 
 
 def create_pool(
     *,
-    connection_string: str = config.get_connection_string(),
-    max_size: int = config.get_max_connections(),
+    connection_str: str,
+    max_size: int,
 ) -> psycopg2.pool.ThreadedConnectionPool:
-    return psycopg2.pool.ThreadedConnectionPool(
-        3,
-        max_size,
-        dsn=connection_string,
-    )
+    return psycopg2.pool.ThreadedConnectionPool(3, max_size, dsn=connection_str)
 
 
 # noinspection PyBroadException
@@ -41,10 +36,10 @@ def _connect(*, pool: psycopg2.pool.ThreadedConnectionPool) -> connection:
         pool.putconn(con)
 
 
-def open_db(*, pool: psycopg2.pool.ThreadedConnectionPool) -> Db:
+def open_db(*, pool: psycopg2.pool.ThreadedConnectionPool, days_logs_to_keep: int) -> Db:
     loguru.logger.info("Opening database...")
 
-    return _Db(pool=pool)
+    return _Db(pool=pool, days_logs_to_keep=days_logs_to_keep)
 
 
 class Db(abc.ABC):
@@ -53,15 +48,11 @@ class Db(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def create_batch(self) -> int:
+    def delete_old_logs(self) -> None:
         raise NotImplementedError
 
     @abc.abstractmethod
-    def create_job(self, *, task: data.Task) -> data.Job:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def get_ready_tasks(self, *, n: int) -> list[data.Task]:
+    def get_ready_job(self) -> data.Job | None:
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -76,77 +67,77 @@ class Db(abc.ABC):
     def log_job_success(self, *, job_id: int, execution_millis: int) -> None:
         raise NotImplementedError
 
+    @abc.abstractmethod
+    def update_queue(self) -> None:
+        raise NotImplementedError
+
 
 # noinspection SqlDialectInspection
 class _Db(Db):
-    def __init__(self, *, pool: psycopg2.pool.ThreadedConnectionPool):
+    def __init__(
+        self,
+        *,
+        pool: psycopg2.pool.ThreadedConnectionPool,
+        days_logs_to_keep: int,
+    ):
         self._pool = pool
+        self._days_logs_to_keep = days_logs_to_keep
+
+        self._lock = threading.Lock()
 
         self._batch_id = self._create_batch()
 
     def cancel_running_jobs(self, *, reason: str) -> None:
-        sql = "CALL ppe.cancel_running_jobs(p_reason := %(reason)s);"
-        with self._pool.getconn() as con:
-            with con.cursor() as cur:
-                cur.execute(sql, {"reason": reason})
-
-    def create_batch(self) -> int:
-        sql = "SELECT * FROM ppe.create_batch();"
-        with self._pool.getconn() as con:
-            with con.cursor() as cur:
-                cur.execute(sql)
-                if row := cur.fetchone():
-                    return row[0]
-                raise Exception(f"ppe.create_job should have returned an int, but returned {row!r}.")
-
-    def create_job(self, *, task: data.Task) -> data.Job:
-        sql = "SELECT * FROM ppe.create_job(p_batch_id := %(batch_id)s, p_task_id := %(task_id)s);"
-        with _connect(pool=self._pool) as con:
-            with con.cursor() as cur:
-                cur.execute(sql, {"batch_id": self._batch_id, "task_id": task.task_id})
-                if row := cur.fetchone():
-                    job_id = row[0]
-                else:
-                    raise Exception(f"ppe.create_job should have returned an int, but returned {row!r}.")
-        return data.Job(job_id=job_id, batch_id=self._batch_id, task=task)
-
-    def get_ready_tasks(self, /, n: int) -> list[data.Task]:
-        # sql = textwrap.dedent("""
-        #     SELECT
-        #         t.task_id
-        #     ,   t.task_name
-        #     ,   t.cmd
-        #     ,   t.task_sql
-        #     ,   t.retries
-        #     ,   t.timeout_seconds
-        #     FROM ppe.get_ready_tasks(p_max_jobs := %(n)s) AS t;
-        # """)
-        sql = """
-            SELECT
-                t.task_id
-            ,   t.task_name
-            ,   t.cmd
-            ,   t.task_sql
-            ,   t.retries
-            ,   t.timeout_seconds
-            FROM ppe.task_queue AS t
-            LIMIT %(n)s
-        """
-        with _connect(pool=self._pool) as con:
-            with con.cursor() as cur:
-                cur.execute(sql, {"n": n})
-                result = cur.fetchall()
-                return [
-                    data.Task(
-                        task_id=row[0],
-                        name=row[1],
-                        cmd=row[2],
-                        sql=row[3],
-                        retries=row[4],
-                        timeout_seconds=row[5],
+        with self._lock:
+            with self._pool.getconn() as con:
+                with con.cursor() as cur:
+                    cur.execute(
+                        "CALL ppe.cancel_running_jobs(p_reason := %(reason)s);",
+                        {"reason": reason},
                     )
-                    for row in result
-                ]
+
+    def delete_old_logs(self) -> None:
+        with self._lock:
+            with _connect(pool=self._pool) as con:
+                with con.cursor() as cur:
+                    cur.execute(
+                        "CALL ppe.delete_old_log_entries(p_current_batch_id := %(batch_id)s, p_days_to_keep := %(days_to_keep)s)",
+                        {"batch_id": self._batch_id, "days_to_keep": self._days_logs_to_keep},
+                    )
+
+    def get_ready_job(self) -> data.Job | None:
+        with self._lock:
+            with _connect(pool=self._pool) as con:
+                with con.cursor() as cur:
+                    cur.execute("""
+                        SELECT
+                            t.task_id
+                        ,   t.task_name
+                        ,   t.cmd
+                        ,   t.task_sql
+                        ,   t.retries
+                        ,   t.timeout_seconds
+                        FROM ppe.get_ready_task() AS t;
+                    """)
+                    if row := cur.fetchone():
+                        task = data.Task(
+                            task_id=row[0],
+                            name=row[1],
+                            cmd=row[2],
+                            sql=row[3],
+                            retries=row[4],
+                            timeout_seconds=row[5],
+                        )
+                        cur.execute(
+                            "SELECT * FROM ppe.create_job(p_batch_id := %(batch_id)s, p_task_id := %(task_id)s);",
+                            {"batch_id": self._batch_id, "task_id": task.task_id},
+                        )
+                        if row := cur.fetchone():
+                            job_id = row[0]
+                        else:
+                            raise Exception(f"ppe.create_job should have returned an int, but returned {row!r}.")
+                        return data.Job(job_id=job_id, batch_id=self._batch_id, task=task)
+        return None
 
     def log_batch_error(self, *, error_message: str) -> None:
         sql = "CALL ppe.log_batch_error(p_batch_id := %(batch_id)s, p_message := %(error_message)s);"
@@ -166,6 +157,12 @@ class _Db(Db):
             with con.cursor() as cur:
                 cur.execute(sql, {"job_id": job_id, "execution_millis": execution_millis})
 
+    def update_queue(self) -> None:
+        sql = "CALL ppe.update_queue();"
+        with _connect(pool=self._pool) as con:
+            with con.cursor() as cur:
+                cur.execute(sql)
+
     def _create_batch(self) -> int:
         sql = "SELECT * FROM ppe.create_batch();"
         with _connect(pool=self._pool) as con:
@@ -177,6 +174,11 @@ class _Db(Db):
 
 
 if __name__ == '__main__':
-    d = open_db(pool=create_pool())
-    for t in d.get_ready_tasks(n=5):
-        print(t)
+    from src.adapter import config, fs
+
+    p = create_pool(max_size=1, connection_str=config.get_connection_str(config_file=fs.config_path()))
+    d = open_db(pool=p, days_logs_to_keep=3)
+    d.update_queue()
+    j = d.get_ready_job()
+    print(j)
+
