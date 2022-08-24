@@ -168,19 +168,8 @@ class _Db(Db):
                 cur.execute(sql, {"job_id": job_id, "execution_millis": execution_millis})
 
     def update_queue(self) -> None:
-        sql = "CALL ppe.update_queue();"
-        with _connect(pool=self._pool) as con:
-            with con.cursor() as cur:
-                cur.execute(sql)
-
-
-if __name__ == '__main__':
-    from src.adapter import config, fs
-
-    p = create_pool(max_size=1, connection_str=config.get_connection_str(config_file=fs.config_path()))
-    b = create_batch(pool=p)
-    d = open_db(batch_id=b, pool=p, days_logs_to_keep=3)
-    d.update_queue()
-    j = d.get_ready_job()
-    print(j)
-
+        with self._lock:
+            with _connect(pool=self._pool) as con:
+                cur: psycopg2.cursor
+                with con.cursor() as cur:
+                    cur.execute("CALL ppe.update_queue();")

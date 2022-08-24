@@ -7,7 +7,7 @@ import time
 import typing
 
 import loguru
-import psycopg
+import psycopg2
 
 from src import adapter, data
 
@@ -172,8 +172,9 @@ def _run_sql(*, job: data.Job, connection_str: str, result_queue: "mp.Queue[data
 
     result = data.JobResult.error(job=job, code=-1, message=f"[{job.task.name}] never ran.", retries=retries)
     try:
-        with psycopg.connect(connection_str, autocommit=True) as con:
-            con.execute(typing.cast(str, job.task.sql))
+        with psycopg2.connect(connection_str) as con:
+            with con.cursor() as cur:
+                cur.execute(typing.cast(str, job.task.sql))
 
         result = data.JobResult.success(
             job=job,

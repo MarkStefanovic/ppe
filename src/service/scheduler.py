@@ -42,6 +42,7 @@ def run(*, db: adapter.db.Db, seconds_between_updates: int, seconds_between_clea
             loguru.logger.debug("Cleaning up old logs...")
             last_cleanup = datetime.datetime.now()
             db.delete_old_logs()
+            loguru.logger.debug("Finished cleaning up logs.")
 
         loguru.logger.debug("Updating queue...")
         try:
