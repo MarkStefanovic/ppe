@@ -10,7 +10,7 @@ from psycopg2._psycopg import connection
 
 from src import data
 
-__all__ = ("create_pool", "Db", "open_db")
+__all__ = ("create_batch", "create_pool", "Db", "open_db")
 
 
 def create_pool(
@@ -36,10 +36,20 @@ def _connect(*, pool: psycopg2.pool.ThreadedConnectionPool) -> connection:
         pool.putconn(con)
 
 
-def open_db(*, pool: psycopg2.pool.ThreadedConnectionPool, days_logs_to_keep: int) -> Db:
+def open_db(*, batch_id: int, pool: psycopg2.pool.ThreadedConnectionPool, days_logs_to_keep: int) -> Db:
     loguru.logger.info("Opening database...")
 
-    return _Db(pool=pool, days_logs_to_keep=days_logs_to_keep)
+    return _Db(batch_id=batch_id, pool=pool, days_logs_to_keep=days_logs_to_keep)
+
+
+# noinspection SqlDialectInspection
+def create_batch(*, pool: psycopg2.pool.ThreadedConnectionPool) -> int:
+    with _connect(pool=pool) as con:
+        with con.cursor() as cur:
+            cur.execute("SELECT * FROM ppe.create_batch();")
+            if row := cur.fetchone():
+                return row[0]
+            raise Exception(f"ppe.create_batch should have returned an int, but returned {row!r}.")
 
 
 class Db(abc.ABC):
@@ -77,15 +87,15 @@ class _Db(Db):
     def __init__(
         self,
         *,
+        batch_id: int,
         pool: psycopg2.pool.ThreadedConnectionPool,
         days_logs_to_keep: int,
     ):
+        self._batch_id = batch_id
         self._pool = pool
         self._days_logs_to_keep = days_logs_to_keep
 
         self._lock = threading.Lock()
-
-        self._batch_id = self._create_batch()
 
     def cancel_running_jobs(self, *, reason: str) -> None:
         with self._lock:
@@ -163,21 +173,13 @@ class _Db(Db):
             with con.cursor() as cur:
                 cur.execute(sql)
 
-    def _create_batch(self) -> int:
-        sql = "SELECT * FROM ppe.create_batch();"
-        with _connect(pool=self._pool) as con:
-            with con.cursor() as cur:
-                cur.execute(sql)
-                if row := cur.fetchone():
-                    return row[0]
-                raise Exception(f"ppe.create_batch should have returned an int, but returned {row!r}.")
-
 
 if __name__ == '__main__':
     from src.adapter import config, fs
 
     p = create_pool(max_size=1, connection_str=config.get_connection_str(config_file=fs.config_path()))
-    d = open_db(pool=p, days_logs_to_keep=3)
+    b = create_batch(pool=p)
+    d = open_db(batch_id=b, pool=p, days_logs_to_keep=3)
     d.update_queue()
     j = d.get_ready_job()
     print(j)

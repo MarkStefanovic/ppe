@@ -18,7 +18,9 @@ def main(
     try:
         pool = adapter.db.create_pool(connection_str=connection_str, max_size=max_connections)
 
-        db = adapter.db.open_db(pool=pool, days_logs_to_keep=days_logs_to_keep)
+        batch_id = adapter.db.create_batch(pool=pool)
+
+        db = adapter.db.open_db(batch_id=batch_id, pool=pool, days_logs_to_keep=days_logs_to_keep)
 
         db.cancel_running_jobs(reason="A new batch was started.")
 
