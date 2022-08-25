@@ -486,6 +486,8 @@ CREATE OR REPLACE PROCEDURE ppe.update_queue ()
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    SET TIME ZONE 'UTC';
+
     WITH latest_attempts AS (
         SELECT DISTINCT ON (s.task_id)
             s.task_id
