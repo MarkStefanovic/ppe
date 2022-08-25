@@ -1,6 +1,7 @@
 import logging
 import sys
 import threading
+import time
 
 import loguru
 
@@ -42,6 +43,9 @@ def main(
         for job_runner in job_runners:
             job_runner.start()
 
+        while not cancel.is_set():
+            time.sleep(1)
+
         scheduler.join()
         for job_runner in job_runners:
             job_runner.join()
@@ -66,6 +70,7 @@ if __name__ == '__main__':
     loguru.logger.info("Starting ppe...")
 
     config_file = adapter.fs.config_path()
+
     main(
         connection_str=adapter.config.get_connection_str(config_file=config_file),
         max_connections=adapter.config.get_max_connections(config_file=config_file),

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime
 import threading
 import time
@@ -40,14 +42,14 @@ class Scheduler(threading.Thread):
             raise self._e
 
     def run(self) -> None:
-        self._db.delete_old_logs()
-        last_cleanup = datetime.datetime.now()
+        try:
+            self._db.delete_old_logs()
+            last_cleanup = datetime.datetime.now()
 
-        self._db.update_queue()
-        last_queue_update = datetime.datetime.now()
+            self._db.update_queue()
+            last_queue_update = datetime.datetime.now()
 
-        while not self._cancel.is_set():
-            try:
+            while not self._cancel.is_set():
                 if (datetime.datetime.now() - last_cleanup).total_seconds() > self._seconds_between_cleanups:
                     loguru.logger.debug("Cleaning up old logs...")
                     self._db.delete_old_logs()
@@ -59,10 +61,10 @@ class Scheduler(threading.Thread):
                     self._db.update_queue()
                     last_queue_update = datetime.datetime.now()
                     loguru.logger.debug("Finished updating queue.")
-            except Exception as e:
-                self._e = e
-                loguru.logger.exception(e)
-                self._db.log_batch_error(error_message=str(e))
-                self._cancel.set()
 
-            time.sleep(1)
+                time.sleep(1)
+        except Exception as e:
+            self._e = e
+            loguru.logger.exception(e)
+            self._db.log_batch_error(error_message=str(e))
+            self._cancel.set()
