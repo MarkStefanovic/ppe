@@ -11,47 +11,50 @@ import psycopg2
 
 from src import adapter, data
 
-__all__ = ("start",)
+__all__ = ("Runner",)
 
 
-def start(*, db: adapter.db.Db, connection_str: str) -> threading.Thread:
-    loguru.logger.info("Starting job runner...")
+class Runner(threading.Thread):
+    def __init__(self, *, db: adapter.db.Db, connection_str: str, cancel: threading.Event):
+        super().__init__()
 
-    th = threading.Thread(
-        name="runner",
-        target=run,
-        kwargs={
-            "db": db,
-            "connection_str": connection_str,
-        },
-        daemon=True,
-    )
-    th.start()
-    return th
+        self._db = db
+        self._connection_str = connection_str
+        self._cancel = cancel
 
+        self._e: Exception | None = None
 
-def run(*, db: adapter.db.Db, connection_str: str) -> None:
-    while True:
-        try:
-            job = db.get_ready_job()
-            if job is not None:
-                loguru.logger.info(f"Starting [{job.task.name}]...")
+    def error(self) -> Exception | None:
+        return self._e
 
-                result = _run_job_with_retry(
-                    connection_str=connection_str,
-                    job=job,
-                    retries_so_far=0,
-                )
+    def join(self, timeout: float | None = ...) -> None:
+        super().join()
 
-                _add_result(db=db, result=result)
-        except queue.Empty:
-            loguru.logger.debug("Queue is empty")
-        except Exception as e:
-            loguru.logger.exception(e)
-            db.log_batch_error(error_message=str(e))
-            raise
+        loguru.logger.info("Runner stopped.")
 
-        time.sleep(1)
+        # reraise exception in main thread
+        if self._e is not None:
+            raise self._e
+
+    def run(self) -> None:
+        while not self._cancel.is_set():
+            try:
+                job = self._db.get_ready_job()
+                if job is not None:
+                    loguru.logger.info(f"Starting [{job.task.name}]...")
+
+                    result = _run_job_with_retry(connection_str=self._connection_str, job=job, retries_so_far=0)
+
+                    _add_result(db=self._db, result=result)
+            except queue.Empty:
+                loguru.logger.debug("Queue is empty")
+            except Exception as e:
+                self._e = e
+                loguru.logger.exception(e)
+                self._db.log_batch_error(error_message=str(e))
+                self._cancel.set()
+
+            time.sleep(1)
 
 
 def _add_result(*, db: adapter.db.Db, result: data.JobResult) -> None:

@@ -1,5 +1,6 @@
 import logging
 import sys
+import threading
 
 import loguru
 
@@ -15,6 +16,7 @@ def main(
     seconds_between_cleanups: int,
     days_logs_to_keep: int,
 ) -> None:
+    cancel = threading.Event()
     try:
         pool = adapter.db.create_pool(connection_str=connection_str, max_size=max_connections)
 
@@ -24,23 +26,33 @@ def main(
 
         db.cancel_running_jobs(reason="A new batch was started.")
 
-        scheduler_thread = service.scheduler.start(
+        scheduler = service.scheduler.Scheduler(
             db=db,
             seconds_between_updates=seconds_between_updates,
             seconds_between_cleanups=seconds_between_cleanups,
+            cancel=cancel,
         )
 
         job_runners = [
-            service.runner.start(db=db, connection_str=connection_str)
+            service.runner.Runner(db=db, connection_str=connection_str, cancel=cancel)
             for _ in range(max_jobs)
         ]
 
-        scheduler_thread.join()
+        scheduler.start()
+        for job_runner in job_runners:
+            job_runner.start()
+
+        scheduler.join()
         for job_runner in job_runners:
             job_runner.join()
+    except (KeyboardInterrupt, SystemExit):
+        loguru.logger.info(f"Service shutdown triggered.")
+        sys.exit()
     except Exception as e:
         loguru.logger.exception(e)
-        raise
+        sys.exit(-1)
+    finally:
+        cancel.set()
 
 
 if __name__ == '__main__':
@@ -62,7 +74,3 @@ if __name__ == '__main__':
         seconds_between_cleanups=adapter.config.get_seconds_between_cleanups(config_file=config_file),
         days_logs_to_keep=adapter.config.get_days_logs_to_keep(config_file=config_file),
     )
-
-    loguru.logger.error("ppe stopped somehow.")
-
-    sys.exit(-1)

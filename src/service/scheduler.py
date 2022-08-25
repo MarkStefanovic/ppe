@@ -6,49 +6,63 @@ import loguru
 
 from src import adapter
 
-__all__ = ("start",)
+__all__ = ("Scheduler",)
 
 
-def start(
-    *,
-    db: adapter.db.Db,
-    seconds_between_updates: int,
-    seconds_between_cleanups: int,
-) -> threading.Thread:
-    loguru.logger.info("Starting scheduler...")
+class Scheduler(threading.Thread):
+    def __init__(
+        self,
+        *,
+        db: adapter.db.Db,
+        seconds_between_updates: int,
+        seconds_between_cleanups: int,
+        cancel: threading.Event,
+    ):
+        super().__init__()
 
-    th = threading.Thread(
-        name="scheduler",
-        target=run,
-        kwargs={
-            "db": db,
-            "seconds_between_updates": seconds_between_updates,
-            "seconds_between_cleanups": seconds_between_cleanups,
-        },
-        daemon=True,
-    )
-    th.start()
+        self._db = db
+        self._seconds_between_updates = seconds_between_updates
+        self._seconds_between_cleanups = seconds_between_cleanups
+        self._cancel = cancel
 
-    return th
+        self._e: Exception | None = None
 
+    def error(self) -> Exception | None:
+        return self._e
 
-def run(*, db: adapter.db.Db, seconds_between_updates: int, seconds_between_cleanups: int) -> None:
-    start = datetime.datetime.now()
-    last_cleanup = start
-    db.delete_old_logs()
+    def join(self, timeout: float | None = ...) -> None:
+        super().join()
 
-    while True:
-        if (datetime.datetime.now() - last_cleanup).total_seconds() > seconds_between_cleanups:
-            loguru.logger.debug("Cleaning up old logs...")
-            last_cleanup = datetime.datetime.now()
-            db.delete_old_logs()
-            loguru.logger.debug("Finished cleaning up logs.")
+        loguru.logger.info("Scheduler stopped.")
 
-        loguru.logger.debug("Updating queue...")
-        try:
-            db.update_queue()
-        except Exception as e:
-            loguru.logger.exception(e)
-            raise
+        # reraise exception in main thread
+        if self._e is not None:
+            raise self._e
 
-        time.sleep(seconds_between_updates)
+    def run(self) -> None:
+        self._db.delete_old_logs()
+        last_cleanup = datetime.datetime.now()
+
+        self._db.update_queue()
+        last_queue_update = datetime.datetime.now()
+
+        while not self._cancel.is_set():
+            try:
+                if (datetime.datetime.now() - last_cleanup).total_seconds() > self._seconds_between_cleanups:
+                    loguru.logger.debug("Cleaning up old logs...")
+                    self._db.delete_old_logs()
+                    last_cleanup = datetime.datetime.now()
+                    loguru.logger.debug("Finished cleaning up logs.")
+
+                if (datetime.datetime.now() - last_queue_update).total_seconds() > self._seconds_between_updates:
+                    loguru.logger.debug("Updating queue...")
+                    self._db.update_queue()
+                    last_queue_update = datetime.datetime.now()
+                    loguru.logger.debug("Finished updating queue.")
+            except Exception as e:
+                self._e = e
+                loguru.logger.exception(e)
+                self._db.log_batch_error(error_message=str(e))
+                self._cancel.set()
+
+            time.sleep(1)

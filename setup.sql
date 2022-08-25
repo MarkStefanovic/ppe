@@ -575,7 +575,7 @@ BEGIN
         ppe.job_complete.ts <> EXCLUDED.ts
     ;
 
-    TRUNCATE TABLE ppe.task_running;
+    TRUNCATE ppe.task_running;
     WITH running_tasks AS (
         SELECT
             lta.task_id

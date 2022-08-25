@@ -7,6 +7,8 @@ TRUNCATE TABLE ppe.job_failure CASCADE;
 TRUNCATE TABLE ppe.job_info CASCADE;
 TRUNCATE TABLE ppe.job_skip CASCADE;
 TRUNCATE TABLE ppe.job_success CASCADE;
+TRUNCATE TABLE ppe.resource CASCADE;
+TRUNCATE TABLE ppe.task_resource CASCADE;
 TRUNCATE TABLE ppe.schedule CASCADE;
 TRUNCATE TABLE ppe.task CASCADE;
 TRUNCATE TABLE ppe.task_schedule CASCADE;
@@ -18,7 +20,6 @@ TRUNCATE TABLE ppe.latest_task_attempt CASCADE;
 DO $$
 DECLARE
     v_batch_id INT;
-    v_deleted_log_entries INT;
     v_job_1_id INT;
     v_job_2_id INT;
     v_job_3_id INT;
@@ -107,7 +108,3 @@ $$;
 CALL ppe.update_queue();
 
 SELECT * FROM ppe.task_queue;
-
-
--- SELECT * FROM ppe.get_ready_task();
--- SELECT * FROM ppe.task_running;
