@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 import threading
 import time
@@ -18,12 +19,15 @@ def main(
     days_logs_to_keep: int,
 ) -> None:
     cancel = threading.Event()
+
+    pool = adapter.db.create_pool(connection_str=connection_str, max_size=max_connections)
+
+    batch_id = adapter.db.create_batch(pool=pool)
+
+    db = adapter.db.open_db(batch_id=batch_id, pool=pool, days_logs_to_keep=days_logs_to_keep)
+
     try:
-        pool = adapter.db.create_pool(connection_str=connection_str, max_size=max_connections)
-
-        batch_id = adapter.db.create_batch(pool=pool)
-
-        db = adapter.db.open_db(batch_id=batch_id, pool=pool, days_logs_to_keep=days_logs_to_keep)
+        db.log_batch_info(message="batch started")
 
         db.cancel_running_jobs(reason="A new batch was started.")
 
@@ -51,9 +55,11 @@ def main(
             job_runner.join()
     except (KeyboardInterrupt, SystemExit):
         loguru.logger.info(f"Service shutdown triggered.")
+        db.log_batch_info(message=f"ppe exited at the request of the user, {os.environ.get('USERNAME', 'Unknown')}.")
         sys.exit()
     except Exception as e:
         loguru.logger.exception(e)
+        db.log_batch_error(error_message=f"ppe closed as a result of the following error: {e}")
         sys.exit(-1)
     finally:
         cancel.set()

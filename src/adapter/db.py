@@ -66,6 +66,10 @@ class Db(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
+    def log_batch_info(self, *, message: str) -> None:
+        raise NotImplementedError
+
+    @abc.abstractmethod
     def log_batch_error(self, *, error_message: str) -> None:
         raise NotImplementedError
 
@@ -149,23 +153,37 @@ class _Db(Db):
                         return data.Job(job_id=job_id, batch_id=self._batch_id, task=task)
         return None
 
-    def log_batch_error(self, *, error_message: str) -> None:
-        sql = "CALL ppe.log_batch_error(p_batch_id := %(batch_id)s, p_message := %(error_message)s);"
+    def log_batch_info(self, *, message: str) -> None:
         with _connect(pool=self._pool) as con:
             with con.cursor() as cur:
-                cur.execute(sql, {"batch_id": self._batch_id, "error_message": error_message})
+                cur.execute(
+                    "CALL ppe.log_batch_info(p_batch_id := %(batch_id)s, p_message := %(message)s);",
+                    {"batch_id": self._batch_id, "message": message},
+                )
+
+    def log_batch_error(self, *, error_message: str) -> None:
+        with _connect(pool=self._pool) as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    "CALL ppe.log_batch_error(p_batch_id := %(batch_id)s, p_message := %(error_message)s);",
+                    {"batch_id": self._batch_id, "error_message": error_message},
+                )
 
     def log_job_error(self, *, job_id: int, return_code: int, error_message: str) -> None:
-        sql = "CALL ppe.job_failed(p_job_id := %(job_id)s, p_message := %(error_message)s);"
         with _connect(pool=self._pool) as con:
             with con.cursor() as cur:
-                cur.execute(sql, {"job_id": job_id, "error_message": error_message})
+                cur.execute(
+                    "CALL ppe.job_failed(p_job_id := %(job_id)s, p_message := %(error_message)s);",
+                    {"job_id": job_id, "error_message": error_message},
+                )
 
     def log_job_success(self, *, job_id: int, execution_millis: int) -> None:
-        sql = "CALL ppe.job_completed_successfully(p_job_id := %(job_id)s, p_execution_millis := %(execution_millis)s);"
         with _connect(pool=self._pool) as con:
             with con.cursor() as cur:
-                cur.execute(sql, {"job_id": job_id, "execution_millis": execution_millis})
+                cur.execute(
+                    "CALL ppe.job_completed_successfully(p_job_id := %(job_id)s, p_execution_millis := %(execution_millis)s);",
+                    {"job_id": job_id, "execution_millis": execution_millis},
+                )
 
     def update_queue(self) -> None:
         with self._lock:
