@@ -32,7 +32,7 @@ class Scheduler(threading.Thread):
     def error(self) -> Exception | None:
         return self._e
 
-    def join(self, timeout: float | None = ...) -> None:
+    def join(self, timeout: float | None = None) -> None:
         super().join()
 
         loguru.logger.info("Scheduler stopped.")
