@@ -1,21 +1,22 @@
-TRUNCATE TABLE ppe.batch CASCADE;
-TRUNCATE TABLE ppe.batch_error CASCADE;
-TRUNCATE TABLE ppe.batch_info CASCADE;
-TRUNCATE TABLE ppe.job CASCADE;
-TRUNCATE TABLE ppe.job_cancel CASCADE;
-TRUNCATE TABLE ppe.job_failure CASCADE;
-TRUNCATE TABLE ppe.job_info CASCADE;
-TRUNCATE TABLE ppe.job_skip CASCADE;
-TRUNCATE TABLE ppe.job_success CASCADE;
-TRUNCATE TABLE ppe.resource CASCADE;
-TRUNCATE TABLE ppe.task_resource CASCADE;
-TRUNCATE TABLE ppe.schedule CASCADE;
-TRUNCATE TABLE ppe.task CASCADE;
-TRUNCATE TABLE ppe.task_schedule CASCADE;
-TRUNCATE TABLE ppe.task_running CASCADE;
-TRUNCATE TABLE ppe.task_queue CASCADE;
-TRUNCATE TABLE ppe.job_complete CASCADE;
-TRUNCATE TABLE ppe.latest_task_attempt CASCADE;
+TRUNCATE ppe.batch CASCADE;
+TRUNCATE ppe.batch_error CASCADE;
+TRUNCATE ppe.batch_info CASCADE;
+TRUNCATE ppe.job CASCADE;
+TRUNCATE ppe.job_cancel CASCADE;
+TRUNCATE ppe.job_failure CASCADE;
+TRUNCATE ppe.job_info CASCADE;
+TRUNCATE ppe.job_skip CASCADE;
+TRUNCATE ppe.job_success CASCADE;
+TRUNCATE ppe.resource CASCADE;
+TRUNCATE ppe.task_resource CASCADE;
+TRUNCATE ppe.schedule CASCADE;
+TRUNCATE ppe.task CASCADE;
+TRUNCATE ppe.task_schedule CASCADE;
+TRUNCATE ppe.task_running CASCADE;
+TRUNCATE ppe.task_queue CASCADE;
+TRUNCATE ppe.job_complete CASCADE;
+TRUNCATE ppe.latest_task_attempt CASCADE;
+TRUNCATE ppe.resource_status CASCADE;
 
 DO $$
 DECLARE

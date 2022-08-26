@@ -467,6 +467,7 @@ CREATE TABLE ppe.job_complete (
 
 CREATE TABLE ppe.task_running (
     task_id INT PRIMARY KEY REFERENCES ppe.task (task_id)
+,   job_id INT NOT NULL REFERENCES ppe.job (job_id)
 ,   start_ts TIMESTAMPTZ(0) NOT NULL
 );
 
@@ -480,6 +481,13 @@ CREATE TABLE ppe.task_queue (
 ,   latest_attempt_ts TIMESTAMPTZ(0) NULL
 ,   ts TIMESTAMPTZ(0) NOT NULL DEFAULT now()
 ,   UNIQUE (task_name)
+);
+
+CREATE TABLE ppe.resource_status (
+    resource_id INT PRIMARY KEY REFERENCES ppe.resource (resource_id)
+,   capacity INT NOT NULL
+,   reserved INT NOT NULL
+,   available INT NOT NULL
 );
 
 CREATE OR REPLACE PROCEDURE ppe.update_queue ()
@@ -578,78 +586,30 @@ BEGIN
     ;
 
     TRUNCATE ppe.task_running;
-    WITH running_tasks AS (
-        SELECT
-            lta.task_id
-        ,   lta.start_ts
-        FROM ppe.latest_task_attempt AS lta
-        JOIN ppe.task AS t
-            ON lta.task_id = t.task_id
-        WHERE
-            NOT EXISTS (
-                SELECT 1
-                FROM ppe.job_complete AS jc
-                WHERE
-                    lta.job_id = jc.job_id
-            )
-            AND EXTRACT(EPOCH FROM now() - lta.start_ts) <= t.timeout_seconds
-    )
     INSERT INTO ppe.task_running (
         task_id
+    ,   job_id
     ,   start_ts
     )
     SELECT
-        rt.task_id
-    ,   rt.start_ts
-    FROM running_tasks AS rt;
+        lta.task_id
+    ,   lta.job_id
+    ,   lta.start_ts
+    FROM ppe.latest_task_attempt AS lta
+    JOIN ppe.task AS t
+        ON lta.task_id = t.task_id
+    WHERE
+        NOT EXISTS (
+            SELECT 1
+            FROM ppe.job_complete AS jc
+            WHERE
+                lta.job_id = jc.job_id
+        )
+        AND EXTRACT(EPOCH FROM now() - lta.start_ts) <= t.timeout_seconds
+    ;
 
-    TRUNCATE ppe.task_queue;
-    WITH ready_tasks AS (
-        SELECT DISTINCT ON (t.task_id)
-            t.task_id
-        ,   t.task_name
-        ,   t.cmd
-        ,   t.task_sql
-        ,   t.retries
-        ,   lta.start_ts AS latest_attempt
-        ,   EXTRACT(EPOCH FROM now() - lta.start_ts) AS seconds_since_latest_attempt
-        ,   s.min_seconds_between_attempts
-        ,   t.timeout_seconds
-        ,   lta.start_ts AS latest_attempt_ts
-        FROM ppe.task AS t
-        JOIN ppe.task_schedule AS ts -- 1..m
-            ON t.task_id = ts.task_id
-        JOIN ppe.schedule AS s
-             ON ts.schedule_id = s.schedule_id
-        LEFT JOIN ppe.latest_task_attempt AS lta
-            ON t.task_id = lta.task_id
-        LEFT JOIN ppe.job_complete AS ltc
-            ON lta.job_id = ltc.job_id
-        WHERE
-            t.enabled
-            AND now() BETWEEN s.start_ts AND s.end_ts
-            AND EXTRACT(MONTH FROM now()) BETWEEN s.start_month AND s.end_month
-            AND EXTRACT(ISODOW FROM now()) BETWEEN s.start_week_day AND s.end_week_day
-            AND EXTRACT(DAY FROM now()) BETWEEN s.start_month_day AND s.end_month_day
-            AND EXTRACT(HOUR FROM now()) BETWEEN s.start_hour AND s.end_hour
-            AND EXTRACT(MINUTE FROM now()) BETWEEN s.start_minute AND s.end_minute
-            AND (
-                NOT EXISTS (
-                    SELECT 1
-                    FROM ppe.task_running AS tr
-                    WHERE lta.task_id = tr.task_id
-                )
-                OR EXTRACT(EPOCH FROM now() - lta.start_ts) > t.timeout_seconds + 60
-            )
-            AND (
-                EXTRACT(EPOCH FROM now() - ltc.ts) > s.min_seconds_between_attempts
-                OR ltc.job_id IS NULL
-            )
-        ORDER BY
-            t.task_id
-        ,   lta.start_ts DESC
-    )
-    , running_job_resources AS (
+    TRUNCATE ppe.resource_status;
+    WITH running_job_resources AS (
         SELECT
             tr.resource_id
         ,   SUM(tr.units) AS units_in_use
@@ -659,26 +619,23 @@ BEGIN
         GROUP BY
             tr.resource_id
     )
-    , available_resources AS (
-        SELECT
-            r.resource_id
-        ,   r.capacity - COALESCE(rjr.units_in_use, 0) AS units_available
-        FROM ppe.resource AS r
-        LEFT JOIN running_job_resources AS rjr
-            ON r.resource_id = rjr.resource_id
-        WHERE
-            r.capacity - COALESCE(rjr.units_in_use, 0) > 0
+    INSERT INTO ppe.resource_status (
+        resource_id
+    ,   capacity
+    ,   reserved
+    ,   available
     )
-    , ready_jobs_with_available_resources AS (
-        SELECT DISTINCT
-            rt.task_id
-        FROM ready_tasks AS rt
-        JOIN ppe.task_resource AS tr
-            ON rt.task_id = tr.task_id
-        JOIN available_resources AS ar
-            ON rt.task_id = tr.task_id
-            AND tr.resource_id = ar.resource_id
-    )
+    SELECT
+        r.resource_id
+    ,   r.capacity
+    ,   COALESCE(rjr.units_in_use, 0) AS reserved
+    ,   r.capacity - COALESCE(rjr.units_in_use, 0) AS available
+    FROM ppe.resource AS r
+    LEFT JOIN running_job_resources AS rjr
+        ON r.resource_id = rjr.resource_id
+    ;
+
+    TRUNCATE ppe.task_queue;
     INSERT INTO ppe.task_queue (
         task_id
     ,   task_name
@@ -688,17 +645,55 @@ BEGIN
     ,   timeout_seconds
     ,   latest_attempt_ts
     )
-    SELECT
-        rt.task_id
-    ,   rt.task_name
-    ,   rt.cmd
-    ,   rt.task_sql
-    ,   rt.retries
-    ,   rt.timeout_seconds
-    ,   rt.latest_attempt_ts
-    FROM ready_tasks AS rt
-    JOIN ready_jobs_with_available_resources AS rjwar
-        ON rt.task_id = rjwar.task_id
+    SELECT DISTINCT ON (t.task_id)
+        t.task_id
+    ,   t.task_name
+    ,   t.cmd
+    ,   t.task_sql
+    ,   t.retries
+    ,   t.timeout_seconds
+    ,   lta.start_ts AS latest_attempt_ts
+    FROM ppe.task AS t
+    JOIN ppe.task_schedule AS ts -- 1..m
+        ON t.task_id = ts.task_id
+    JOIN ppe.schedule AS s
+         ON ts.schedule_id = s.schedule_id
+    LEFT JOIN ppe.latest_task_attempt AS lta
+        ON t.task_id = lta.task_id
+    LEFT JOIN ppe.job_complete AS ltc
+        ON lta.job_id = ltc.job_id
+    WHERE
+        t.enabled
+        AND now() BETWEEN s.start_ts AND s.end_ts
+        AND EXTRACT(MONTH FROM now()) BETWEEN s.start_month AND s.end_month
+        AND EXTRACT(ISODOW FROM now()) BETWEEN s.start_week_day AND s.end_week_day
+        AND EXTRACT(DAY FROM now()) BETWEEN s.start_month_day AND s.end_month_day
+        AND EXTRACT(HOUR FROM now()) BETWEEN s.start_hour AND s.end_hour
+        AND EXTRACT(MINUTE FROM now()) BETWEEN s.start_minute AND s.end_minute
+        AND (
+            NOT EXISTS (
+                SELECT 1
+                FROM ppe.task_running AS tr
+                WHERE lta.task_id = tr.task_id
+            )
+            OR EXTRACT(EPOCH FROM now() - lta.start_ts) > t.timeout_seconds + 60
+        )
+        AND (
+            EXTRACT(EPOCH FROM now() - ltc.ts) > s.min_seconds_between_attempts
+            OR ltc.job_id IS NULL
+        )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM ppe.resource_status AS rs
+            JOIN ppe.task_resource AS tr
+                ON t.task_id = tr.task_id
+            WHERE
+                rs.resource_id = tr.resource_id
+                AND rs.available <= 0
+        )
+    ORDER BY
+        t.task_id
+    ,   lta.start_ts DESC
     ;
 END;
 $$;
