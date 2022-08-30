@@ -752,70 +752,112 @@ DECLARE
 BEGIN
     RAISE NOTICE 'v_cutoff: %', v_cutoff;
 
-    DELETE FROM ppe.batch AS b
-    WHERE b.batch_id <> p_current_batch_id AND b.ts < v_cutoff;
+    DROP TABLE IF EXISTS tmp_ppe_jobs_to_delete;
+    CREATE TEMPORARY TABLE tmp_ppe_jobs_to_delete (
+        job_id INT PRIMARY KEY
+    );
 
-    DELETE FROM ppe.batch_error AS be
-    WHERE NOT EXISTS(SELECT 1 FROM ppe.batch AS b WHERE be.batch_id = b.batch_id);
+    INSERT INTO tmp_ppe_jobs_to_delete (job_id)
+    SELECT j.job_id
+    FROM ppe.job AS j
+    WHERE j.ts < v_cutoff;
 
-    DELETE FROM ppe.batch_info AS bi
-    WHERE NOT EXISTS(SELECT 1 FROM ppe.batch AS b WHERE bi.batch_id = b.batch_id);
+    DELETE FROM ppe.latest_task_attempt AS lta
+    WHERE EXISTS (
+        SELECT 1
+        FROM tmp_ppe_jobs_to_delete AS tmp
+        WHERE lta.job_id = tmp.job_id
+    );
 
-    DELETE FROM ppe.job AS j
-    WHERE NOT EXISTS(SELECT 1 FROM ppe.batch AS b WHERE j.batch_id = b.batch_id);
-
-    DELETE FROM ppe.job AS j
-    WHERE
-        NOT EXISTS(
-            SELECT 1
-            FROM ppe.batch AS b
-            WHERE j.batch_id = b.batch_id
-        )
-    ;
+    DELETE FROM ppe.job_complete AS ji
+    WHERE EXISTS (
+        SELECT 1
+        FROM tmp_ppe_jobs_to_delete AS tmp
+        WHERE ji.job_id = tmp.job_id
+    );
 
     DELETE FROM ppe.job_info AS ji
-    USING ppe.job AS j
-    WHERE
-        ji.job_id = j.job_id
-        AND NOT EXISTS(
-            SELECT 1
-            FROM ppe.batch AS b
-            WHERE j.batch_id = b.batch_id
-        )
-    ;
+    WHERE EXISTS (
+        SELECT 1
+        FROM tmp_ppe_jobs_to_delete AS tmp
+        WHERE ji.job_id = tmp.job_id
+    );
 
     DELETE FROM ppe.job_failure AS jf
-    USING ppe.job AS j
-    WHERE
-        jf.job_id = j.job_id
-        AND NOT EXISTS(
-            SELECT 1
-            FROM ppe.batch AS b
-            WHERE j.batch_id = b.batch_id
-        )
-    ;
+    WHERE EXISTS (
+        SELECT 1
+        FROM tmp_ppe_jobs_to_delete AS tmp
+        WHERE jf.job_id = tmp.job_id
+    );
 
     DELETE FROM ppe.job_skip AS js
-    USING ppe.job AS j
+    WHERE EXISTS (
+        SELECT 1
+        FROM tmp_ppe_jobs_to_delete AS tmp
+        WHERE js.job_id = tmp.job_id
+    );
+
+    DELETE FROM ppe.job_success AS js
+    WHERE EXISTS (
+        SELECT 1
+        FROM tmp_ppe_jobs_to_delete AS tmp
+        WHERE js.job_id = tmp.job_id
+    );
+
+    DELETE FROM ppe.task_running AS tr
+    WHERE EXISTS (
+        SELECT 1
+        FROM tmp_ppe_jobs_to_delete AS tmp
+        WHERE tr.job_id = tmp.job_id
+    );
+
+    DELETE FROM ppe.job AS j
+    WHERE EXISTS (
+        SELECT 1
+        FROM tmp_ppe_jobs_to_delete AS tmp
+        WHERE j.job_id = tmp.job_id
+    );
+
+    DROP TABLE IF EXISTS tmp_ppe_batches_to_delete;
+    CREATE TEMPORARY TABLE tmp_ppe_batches_to_delete (
+        batch_id INT PRIMARY KEY
+    );
+
+    INSERT INTO tmp_ppe_batches_to_delete (batch_id)
+    SELECT DISTINCT
+        b.batch_id
+    FROM ppe.batch AS b
     WHERE
-        js.job_id = j.job_id
-        AND NOT EXISTS(
+        b.batch_id <> p_current_batch_id
+        AND NOT EXISTS (
             SELECT 1
-            FROM ppe.batch AS b
-            WHERE j.batch_id = b.batch_id
+            FROM ppe.job AS j
+            WHERE b.batch_id = j.batch_id
         )
     ;
 
-    DELETE FROM ppe.job_success AS js
-    USING ppe.job AS j
-    WHERE
-        js.job_id = j.job_id
-        AND NOT EXISTS(
-            SELECT 1
-            FROM ppe.batch AS b
-            WHERE j.batch_id = b.batch_id
-        )
-    ;
+    DELETE FROM ppe.batch_error AS be
+    WHERE EXISTS (
+        SELECT 1
+        FROM tmp_ppe_batches_to_delete tmp
+        WHERE be.batch_id = tmp.batch_id
+    );
+
+    DELETE FROM ppe.batch_info AS bi
+    WHERE EXISTS (
+        SELECT 1
+        FROM tmp_ppe_batches_to_delete tmp
+        WHERE bi.batch_id = tmp.batch_id
+    );
+
+    DELETE FROM ppe.batch AS b
+    WHERE EXISTS (
+        SELECT 1
+        FROM tmp_ppe_batches_to_delete tmp
+        WHERE b.batch_id = tmp.batch_id
+    );
+
 END;
 $$
 LANGUAGE plpgsql;
+
