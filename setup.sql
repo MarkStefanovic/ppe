@@ -36,7 +36,12 @@ BEGIN
     IF p_tool IS NULL THEN
         v_tool_args = NULL;
     ELSE
-        v_tool_args = coalesce(p_tool_args, jsonb_build_object());
+        v_tool_args =
+            CASE
+                WHEN p_tool_args IS NULL THEN NULL
+                WHEN cardinality(p_tool_args) = 0 THEN NULL
+                ELSE p_tool_args
+            END;
     END IF;
 
     WITH new_row_id AS (
