@@ -85,6 +85,10 @@ class Db(abc.ABC):
     def update_queue(self) -> None:
         raise NotImplementedError
 
+    @abc.abstractmethod
+    def update_task_issues(self) -> None:
+        raise NotImplementedError
+
 
 # noinspection SqlDialectInspection
 class _Db(Db):
@@ -111,6 +115,7 @@ class _Db(Db):
                     )
 
     def delete_old_logs(self) -> None:
+        loguru.logger.debug("Deleting old logs...")
         with self._lock:
             with _connect(pool=self._pool) as con:
                 with con.cursor() as cur:
@@ -118,6 +123,7 @@ class _Db(Db):
                         "CALL ppe.delete_old_log_entries(p_current_batch_id := %(batch_id)s, p_days_to_keep := %(days_to_keep)s)",
                         {"batch_id": self._batch_id, "days_to_keep": self._days_logs_to_keep},
                     )
+        loguru.logger.debug("Finished deleting old logs.")
 
     def get_ready_job(self) -> data.Job | None:
         with self._lock:
@@ -188,8 +194,19 @@ class _Db(Db):
                 )
 
     def update_queue(self) -> None:
+        loguru.logger.debug("Updating queue...")
         with self._lock:
             with _connect(pool=self._pool) as con:
                 cur: psycopg2.cursor
                 with con.cursor() as cur:
                     cur.execute("CALL ppe.update_queue();")
+        loguru.logger.debug("Finished updating queue.")
+
+    def update_task_issues(self) -> None:
+        loguru.logger.debug("Updating task issues...")
+        with self._lock:
+            with _connect(pool=self._pool) as con:
+                cur: psycopg2.cursor
+                with con.cursor() as cur:
+                    cur.execute("CALL ppe.update_task_issues();")
+        loguru.logger.debug("Finished updating task issues.")

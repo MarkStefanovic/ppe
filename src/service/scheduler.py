@@ -18,6 +18,7 @@ class Scheduler(threading.Thread):
         db: adapter.db.Db,
         seconds_between_updates: int,
         seconds_between_cleanups: int,
+        seconds_between_task_issue_updates: int,
         cancel: threading.Event,
     ):
         super().__init__()
@@ -25,6 +26,7 @@ class Scheduler(threading.Thread):
         self._db = db
         self._seconds_between_updates = seconds_between_updates
         self._seconds_between_cleanups = seconds_between_cleanups
+        self._seconds_between_task_issue_updates = seconds_between_task_issue_updates
         self._cancel = cancel
 
         self._e: Exception | None = None
@@ -46,21 +48,24 @@ class Scheduler(threading.Thread):
             self._db.delete_old_logs()
             last_cleanup = datetime.datetime.now()
 
+            self._db.update_task_issues()
+            last_task_issues_update = datetime.datetime.now()
+
             self._db.update_queue()
             last_queue_update = datetime.datetime.now()
 
             while not self._cancel.is_set():
                 if (datetime.datetime.now() - last_cleanup).total_seconds() > self._seconds_between_cleanups:
-                    loguru.logger.debug("Cleaning up old logs...")
                     self._db.delete_old_logs()
                     last_cleanup = datetime.datetime.now()
-                    loguru.logger.debug("Finished cleaning up logs.")
+
+                if (datetime.datetime.now() - last_task_issues_update).total_seconds() > self._seconds_between_task_issue_updates:
+                    self._db.update_task_issues()
+                    last_task_issues_update = datetime.datetime.now()
 
                 if (datetime.datetime.now() - last_queue_update).total_seconds() > self._seconds_between_updates:
-                    loguru.logger.debug("Updating queue...")
                     self._db.update_queue()
                     last_queue_update = datetime.datetime.now()
-                    loguru.logger.debug("Finished updating queue.")
 
                 time.sleep(1)
         except Exception as e:

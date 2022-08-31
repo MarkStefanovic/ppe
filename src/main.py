@@ -16,6 +16,7 @@ def main(
     max_jobs: int,
     seconds_between_updates: int,
     seconds_between_cleanups: int,
+    seconds_between_task_issue_updates: int,
     days_logs_to_keep: int,
 ) -> None:
     cancel = threading.Event()
@@ -35,6 +36,7 @@ def main(
             db=db,
             seconds_between_updates=seconds_between_updates,
             seconds_between_cleanups=seconds_between_cleanups,
+            seconds_between_task_issue_updates=seconds_between_task_issue_updates,
             cancel=cancel,
         )
 
@@ -83,5 +85,6 @@ if __name__ == '__main__':
         max_jobs=adapter.config.get_max_simultaneous_jobs(config_file=config_file),
         seconds_between_updates=adapter.config.get_seconds_between_updates(config_file=config_file),
         seconds_between_cleanups=adapter.config.get_seconds_between_cleanups(config_file=config_file),
+        seconds_between_task_issue_updates=adapter.config.get_seconds_between_task_issue_updates(config_file=config_file),
         days_logs_to_keep=adapter.config.get_days_logs_to_keep(config_file=config_file),
     )

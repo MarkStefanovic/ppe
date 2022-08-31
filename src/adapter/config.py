@@ -38,13 +38,17 @@ def get_max_simultaneous_jobs(*, config_file: pathlib.Path) -> int:
 
 @functools.lru_cache(maxsize=1)
 def get_seconds_between_cleanups(*, config_file: pathlib.Path) -> int:
-    return typing.cast(int, _load(config_file=config_file)["get-seconds-between-cleanups"])
+    return typing.cast(int, _load(config_file=config_file)["seconds-between-cleanups"])
 
 
 @functools.lru_cache(maxsize=1)
 def get_seconds_between_updates(*, config_file: pathlib.Path) -> int:
-    return typing.cast(int, _load(config_file=config_file)["get-seconds-between-updates"])
+    return typing.cast(int, _load(config_file=config_file)["seconds-between-updates"])
 
+
+@functools.lru_cache(maxsize=1)
+def get_seconds_between_task_issue_updates(*, config_file: pathlib.Path) -> int:
+    return typing.cast(int, _load(config_file=config_file)["seconds-between-task-issue-updates"])
 
 @functools.lru_cache(maxsize=1)
 def _load(*, config_file: pathlib.Path) -> dict[str, typing.Hashable]:

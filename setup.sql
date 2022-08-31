@@ -896,24 +896,84 @@ CREATE TABLE ppe.task_issue (
     task_issue_id SERIAL PRIMARY KEY
 ,   task_id INT NOT NULL REFERENCES ppe.task (task_id)
 ,   task_issue_type_id INT NOT NULL REFERENCES ppe.task_issue_type (task_issue_type_id)
-,   severity ppe.task_issue_severity_option NOT NULL
 ,   supporting_info JSONB NOT NULL DEFAULT jsonb_build_object()
 ,   ts TIMESTAMPTZ(0) NOT NULL DEFAULT now()
 ,   UNIQUE (task_id, task_issue_type_id)
 );
 
-CREATE PROCEDURE ppe.update_task_issues()
+CREATE OR REPLACE PROCEDURE ppe.update_task_issues()
 LANGUAGE plpgsql
 AS $$
 DECLARE
 BEGIN
+    TRUNCATE ppe.task_issue;
+
 -- (1) task has no schedule associated with it
+    INSERT INTO ppe.task_issue (task_id, task_issue_type_id)
+    SELECT t.task_id, 1 AS task_issue_type_id
+    FROM ppe.task AS t
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM ppe.task_schedule AS ts
+        WHERE t.task_id = ts.task_id
+    );
+
 -- (2) task has repeatedly timed out
+
 -- (3) task has repeatedly errored out
+
 -- (4) task tool not unique
+    INSERT INTO ppe.task_issue (
+        task_id
+    ,   task_issue_type_id
+    ,   supporting_info
+    )
+    SELECT
+        min(t.task_id) AS task_id
+    ,   4 AS task_issue_type_id
+    ,   jsonb_build_object(
+            'task_name', t.task_name
+        ,   'task_ids', string_agg(t.task_id::TEXT, ', ')
+        ,   'tool_args', string_agg(concat('[', array_to_string(t.tool_args, ', '), ']'), ', ')
+        ) AS supporting_info
+    FROM ppe.task AS t
+    GROUP BY
+        t.task_name
+    HAVING
+        COUNT(*) > 1
+    ;
+
 -- (5) task sql not unique
+    INSERT INTO ppe.task_issue (
+        task_id
+    ,   task_issue_type_id
+    ,   supporting_info
+    )
+    SELECT
+        min(t.task_id) AS task_id
+    ,   5 AS task_issue_type_id
+    ,   jsonb_build_object(
+            'task_sql', t.task_sql
+        ,   'task_ids', string_agg(t.task_id::TEXT, ', ')
+        ) AS supporting_info
+    FROM ppe.task AS t
+    GROUP BY
+        t.task_sql
+    HAVING
+        COUNT(*) > 1
+    ;
+
 -- (6) task is slow
+
 -- (7) task has no resources associated with it
+    INSERT INTO ppe.task_issue (task_id, task_issue_type_id)
+    SELECT t.task_id, 7 AS task_issue_type_id
+    FROM ppe.task AS t
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM ppe.task_resource AS tr
+        WHERE t.task_id = tr.task_id
+    );
 END;
 $$;
 
