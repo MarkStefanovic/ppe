@@ -127,7 +127,8 @@ class _Db(Db):
                         SELECT
                             t.task_id
                         ,   t.task_name
-                        ,   t.cmd
+                        ,   t.tool
+                        ,   t.tool_args
                         ,   t.task_sql
                         ,   t.retries
                         ,   t.timeout_seconds
@@ -137,10 +138,11 @@ class _Db(Db):
                         task = data.Task(
                             task_id=row[0],
                             name=row[1],
-                            cmd=row[2],
-                            sql=row[3],
-                            retries=row[4],
-                            timeout_seconds=row[5],
+                            tool=row[2],
+                            tool_args=row[3],
+                            sql=row[4],
+                            retries=row[5],
+                            timeout_seconds=row[6],
                         )
                         cur.execute(
                             "SELECT * FROM ppe.create_job(p_batch_id := %(batch_id)s, p_task_id := %(task_id)s);",

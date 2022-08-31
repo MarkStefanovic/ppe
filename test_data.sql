@@ -1,22 +1,27 @@
-TRUNCATE ppe.batch CASCADE;
-TRUNCATE ppe.batch_error CASCADE;
-TRUNCATE ppe.batch_info CASCADE;
-TRUNCATE ppe.job CASCADE;
-TRUNCATE ppe.job_cancel CASCADE;
-TRUNCATE ppe.job_failure CASCADE;
-TRUNCATE ppe.job_info CASCADE;
-TRUNCATE ppe.job_skip CASCADE;
-TRUNCATE ppe.job_success CASCADE;
-TRUNCATE ppe.resource CASCADE;
-TRUNCATE ppe.task_resource CASCADE;
-TRUNCATE ppe.schedule CASCADE;
-TRUNCATE ppe.task CASCADE;
-TRUNCATE ppe.task_schedule CASCADE;
-TRUNCATE ppe.task_running CASCADE;
-TRUNCATE ppe.task_queue CASCADE;
-TRUNCATE ppe.job_complete CASCADE;
-TRUNCATE ppe.latest_task_attempt CASCADE;
-TRUNCATE ppe.resource_status CASCADE;
+TRUNCATE
+    ppe.batch_error
+,   ppe.batch_info
+,   ppe.batch_info
+,   ppe.job_cancel
+,   ppe.job_complete
+,   ppe.job_failure
+,   ppe.job_info
+,   ppe.job_skip
+,   ppe.job_success
+,   ppe.latest_task_attempt
+,   ppe.resource_status
+,   ppe.task_issue
+,   ppe.task_queue
+,   ppe.task_resource
+,   ppe.task_running
+,   ppe.task_schedule
+,   ppe.job
+,   ppe.batch
+,   ppe.resource
+,   ppe.schedule
+,   ppe.task
+RESTART IDENTITY
+;
 
 DO $$
 DECLARE
@@ -36,7 +41,8 @@ BEGIN
         SELECT *
         FROM ppe.create_task(
             p_task_name := 'Task 1: Never Fails'
-        ,   p_cmd := '{echo, Hello Task 1}'
+        ,   p_task_sql := 'SELECT 1'
+--         ,   p_cmd := '{echo, Hello Task 1}'
 --         ,   p_cmd := ARRAY['echo', '"Hello Task 1"']::TEXT[]
         ,   p_retries := 1
         ,   p_timeout_seconds := 20

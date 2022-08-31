@@ -20,7 +20,8 @@ class Job:
                 Task [
                     task_id:         {self.task.task_id}
                     name:            {self.task.name}
-                    cmd:             {self.task.cmd}
+                    tool:            {self.task.tool}
+                    tool_args:       [{', '.join(repr(arg) for arg in self.task.tool_args or [])}]
                     sql:             {self.task.sql!r}
                     timeout_seconds: {self.task.timeout_seconds}
                     retries:         {self.task.retries}

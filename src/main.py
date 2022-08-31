@@ -39,7 +39,7 @@ def main(
         )
 
         job_runners = [
-            service.runner.Runner(db=db, connection_str=connection_str, cancel=cancel)
+            service.runner.Runner(db=db, connection_str=connection_str, tool_dir=adapter.fs.get_tool_dir(), cancel=cancel)
             for _ in range(max_jobs)
         ]
 
@@ -66,16 +66,16 @@ def main(
 
 
 if __name__ == '__main__':
-    adapter.fs.log_folder().mkdir(exist_ok=True)
+    adapter.fs.get_log_folder().mkdir(exist_ok=True)
 
-    loguru.logger.add(adapter.fs.log_folder() / "error.log", rotation="5 MB", retention="7 days", level="ERROR")
+    loguru.logger.add(adapter.fs.get_log_folder() / "error.log", rotation="5 MB", retention="7 days", level="ERROR")
 
     if getattr(sys, "frozen", False):
         loguru.logger.add(sys.stderr, format="{time} {level} {message}", level=logging.DEBUG)
 
     loguru.logger.info("Starting ppe...")
 
-    config_file = adapter.fs.config_path()
+    config_file = adapter.fs.get_config_path()
 
     main(
         connection_str=adapter.config.get_connection_str(config_file=config_file),

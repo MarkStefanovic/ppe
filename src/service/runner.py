@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import multiprocessing as mp
+import pathlib
 import queue
 import subprocess
 import threading
@@ -17,11 +18,19 @@ __all__ = ("Runner",)
 
 
 class Runner(threading.Thread):
-    def __init__(self, *, db: adapter.db.Db, connection_str: str, cancel: threading.Event):
+    def __init__(
+        self,
+        *,
+        db: adapter.db.Db,
+        connection_str: str,
+        tool_dir: pathlib.Path,
+        cancel: threading.Event,
+    ):
         super().__init__()
 
         self._db = db
         self._connection_str = connection_str
+        self._tool_dir = tool_dir
         self._cancel = cancel
 
         self._e: Exception | None = None
@@ -45,7 +54,12 @@ class Runner(threading.Thread):
                 if job is not None:
                     loguru.logger.info(f"Starting [{job.task.name}]...")
 
-                    result = _run_job_with_retry(connection_str=self._connection_str, job=job, retries_so_far=0)
+                    result = _run_job_with_retry(
+                        connection_str=self._connection_str,
+                        tool_dir=self._tool_dir,
+                        job=job,
+                        retries_so_far=0,
+                    )
 
                     _add_result(db=self._db, result=result)
             except queue.Empty:
@@ -77,15 +91,27 @@ def _add_result(*, db: adapter.db.Db, result: data.JobResult) -> None:
         )
 
 
-def _run_job_with_retry(*, connection_str: str, job: data.Job, retries_so_far: int = 0) -> data.JobResult:
+def _run_job_with_retry(
+    *,
+    connection_str: str,
+    tool_dir: pathlib.Path,
+    job: data.Job,
+    retries_so_far: int = 0,
+) -> data.JobResult:
     loguru.logger.debug(f"Running [{job.task.name}]")
     try:
-        result = _run_job_in_process(connection_str=connection_str, job=job, retries=retries_so_far)
+        result = _run_job_in_process(
+            connection_str=connection_str,
+            tool_dir=tool_dir,
+            job=job,
+            retries=retries_so_far,
+        )
         if result.is_err:
             if job.task.retries > retries_so_far:
                 loguru.logger.info(f"Retrying [{job.task.name}] ({retries_so_far + 1}/{job.task.retries})...")
                 return _run_job_with_retry(
                     connection_str=connection_str,
+                    tool_dir=tool_dir,
                     job=job,
                     retries_so_far=retries_so_far + 1,
                 )
@@ -96,6 +122,7 @@ def _run_job_with_retry(*, connection_str: str, job: data.Job, retries_so_far: i
             loguru.logger.info(f"Retrying [{job.task.name}] ({retries_so_far + 1}/{job.task.retries})...")
             return _run_job_with_retry(
                 connection_str=connection_str,
+                tool_dir=tool_dir,
                 job=job,
                 retries_so_far=retries_so_far + 1,
             )
@@ -104,10 +131,16 @@ def _run_job_with_retry(*, connection_str: str, job: data.Job, retries_so_far: i
         loguru.logger.debug(f"[{job.task.name}] finished.")
 
 
-def _run_job_in_process(*, connection_str: str, job: data.Job, retries: int) -> data.JobResult:
+def _run_job_in_process(
+    *,
+    connection_str: str,
+    tool_dir: pathlib.Path,
+    job: data.Job,
+    retries: int,
+) -> data.JobResult:
     result_queue: "mp.Queue[data.JobResult]" = mp.Queue()
     try:
-        p = mp.Process(target=_run, args=(job, connection_str, result_queue, retries))
+        p = mp.Process(target=_run, args=(job, connection_str, tool_dir, result_queue, retries))
         p.start()
         result = result_queue.get(block=True, timeout=job.task.timeout_seconds)
         p.join()
@@ -130,30 +163,50 @@ def _run_job_in_process(*, connection_str: str, job: data.Job, retries: int) -> 
 def _run(
     job: data.Job,
     connection_str: str,
+    tool_dir: pathlib.Path,
     result_queue: "mp.Queue[data.JobResult]",
     retries: int,
     /,
 ) -> None:
-    if job.task.cmd:
-        _run_cmd(job=job, result_queue=result_queue, retries=retries)
+    if job.task.tool:
+        _run_tool(job=job, tool_dir=tool_dir, result_queue=result_queue, retries=retries)
     else:
         _run_sql(job=job, connection_str=connection_str, result_queue=result_queue, retries=retries)
 
 
-def _run_cmd(*, job: data.Job, result_queue: "mp.Queue[data.JobResult]", retries: int) -> None:
-    start = datetime.datetime.now()
-
-    result = data.JobResult.error(
-        job=job,
-        code=-1,
-        message=f"[{job.task.name}] never ran.",
-        retries=retries,
-    )
+def _run_tool(
+    *,
+    job: data.Job,
+    tool_dir: pathlib.Path,
+    result_queue: "mp.Queue[data.JobResult]",
+    retries: int,
+) -> None:
+    result = data.JobResult.error(job=job, code=-1, message=f"[{job.task.name}] never ran.", retries=retries)
+    assert job.task.tool is not None
     try:
+        if (fp := (tool_dir / job.task.tool)).exists():
+            tool_path = fp
+        elif (nested_fp := tool_dir / pathlib.Path(job.task.tool).with_suffix("").name / job.task.tool).exists():
+            tool_path = nested_fp
+        else:
+            raise Exception(
+                f"The tool specified, {job.task.tool!r}, was not found in the tools directory.  "
+                f"The following paths were checked: {fp.resolve()!s}, {nested_fp.resolve()!s}"
+            )
+
+        start = datetime.datetime.now()
+
+        executable_arg = str(tool_path.resolve())
+        if job.task.tool_args:
+            cmd = [executable_arg] + job.task.tool_args
+        else:
+            cmd = [executable_arg]
+
         proc_result = subprocess.run(
-            typing.cast(list[str], job.task.cmd),
+            cmd,
             capture_output=True,
             timeout=job.task.timeout_seconds,
+            cwd=tool_path.parent,
         )
         execution_millis = int((datetime.datetime.now() - start).total_seconds() * 1000)
         if proc_result.returncode:
@@ -165,6 +218,8 @@ def _run_cmd(*, job: data.Job, result_queue: "mp.Queue[data.JobResult]", retries
             )
         else:
             result = data.JobResult.success(job=job, execution_millis=execution_millis, retries=retries)
+    except subprocess.TimeoutExpired:
+        result = data.JobResult.error(job=job, code=-1, message="Job timed out.", retries=retries)
     except Exception as e:
         result = data.JobResult.error(job=job, code=-1, message=str(e), retries=retries)
     finally:
@@ -172,11 +227,17 @@ def _run_cmd(*, job: data.Job, result_queue: "mp.Queue[data.JobResult]", retries
         result_queue.put(result)
 
 
-def _run_sql(*, job: data.Job, connection_str: str, result_queue: "mp.Queue[data.JobResult]", retries: int) -> None:
-    start = datetime.datetime.now()
-
+def _run_sql(
+    *,
+    job: data.Job,
+    connection_str: str,
+    result_queue: "mp.Queue[data.JobResult]",
+    retries: int,
+) -> None:
     result = data.JobResult.error(job=job, code=-1, message=f"[{job.task.name}] never ran.", retries=retries)
     try:
+        start = datetime.datetime.now()
+
         with psycopg2.connect(connection_str) as con:
             with con.cursor() as cur:
                 cur.execute(typing.cast(str, job.task.sql))

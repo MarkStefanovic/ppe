@@ -3,7 +3,7 @@ import os
 import pathlib
 import sys
 
-__all__ = ("config_path", "log_folder")
+__all__ = ("get_config_path", "get_log_folder", "get_tool_dir")
 
 
 @functools.lru_cache(maxsize=1)
@@ -20,10 +20,19 @@ def _root_dir() -> pathlib.Path:
 
 
 @functools.lru_cache(maxsize=1)
-def config_path() -> pathlib.Path:
+def get_config_path() -> pathlib.Path:
     return _root_dir() / "assets" / "config.json"
 
 
 @functools.lru_cache(maxsize=1)
-def log_folder() -> pathlib.Path:
-    return _root_dir() / "logs"
+def get_log_folder() -> pathlib.Path:
+    d = _root_dir() / "logs"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+@functools.lru_cache(maxsize=1)
+def get_tool_dir() -> pathlib.Path:
+    d = _root_dir() / "tools"
+    d.mkdir(exist_ok=True)
+    return d

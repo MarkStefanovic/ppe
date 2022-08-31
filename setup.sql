@@ -5,9 +5,10 @@ CREATE SCHEMA ppe;
 
 CREATE TABLE ppe.task (
     task_id SERIAL PRIMARY KEY
-,   task_name TEXT NOT NULL
-,   cmd TEXT[] NULL
-,   task_sql TEXT NULL
+,   task_name TEXT NOT NULL CHECK (length(trim(task_name)) > 0)
+,   tool TEXT NULL CHECK (tool IS NULL OR length(trim(tool)) > 0)
+,   tool_args TEXT[] NULL
+,   task_sql TEXT NULL CHECK (task_sql IS NULL OR length(trim(task_sql)) > 0)
 ,   retries INT NOT NULL CHECK (retries >= 0)
 ,   timeout_seconds INT NULL CHECK (timeout_seconds IS NULL OR timeout_seconds > 0)
 ,   enabled BOOL NOT NULL DEFAULT TRUE
@@ -16,7 +17,8 @@ CREATE TABLE ppe.task (
 
 CREATE FUNCTION ppe.create_task(
     p_task_name TEXT
-,   p_cmd TEXT[] = NULL
+,   p_tool TEXT = NULL
+,   p_tool_args TEXT[] = NULL
 ,   p_task_sql TEXT = NULL
 ,   p_retries INT = 0
 ,   p_enabled BOOL = TRUE
@@ -26,24 +28,30 @@ RETURNS INT
 AS $$
 DECLARE
     v_result INT;
+    v_tool_args TEXT[];
 BEGIN
-    ASSERT length(p_task_name) > 0, 'p_task_name cannot be blank.';
-    ASSERT p_cmd IS NULL OR cardinality(p_cmd) > 0, 'If p_cmd is used, then it must have at least 1 item.';
-    ASSERT p_task_sql IS NULL OR length(p_task_sql) > 0, 'If p_task_sql is used, then it cannot be blank.';
-    ASSERT p_cmd IS NOT NULL OR p_task_sql IS NOT NULL, 'Either p_cmd or p_task_sql must be provided';
+    ASSERT p_tool IS NOT NULL OR p_task_sql IS NOT NULL, 'Either p_tool or p_task_sql must be provided';
     ASSERT p_timeout_seconds IS NULL OR p_timeout_seconds > 0, 'If p_timeout_seconds is provided, then it must be > 0.';
+
+    IF p_tool IS NULL THEN
+        v_tool_args = NULL;
+    ELSE
+        v_tool_args = coalesce(p_tool_args, jsonb_build_object());
+    END IF;
 
     WITH new_row_id AS (
         INSERT INTO ppe.task (
             task_name
-        ,   cmd
+        ,   tool
+        ,   tool_args
         ,   task_sql
         ,   retries
         ,   timeout_seconds
         ,   enabled
         ) VALUES (
             p_task_name
-        ,   p_cmd
+        ,   p_tool
+        ,   v_tool_args
         ,   p_task_sql
         ,   COALESCE(p_retries, 0)
         ,   p_timeout_seconds
@@ -474,7 +482,8 @@ CREATE TABLE ppe.task_running (
 CREATE TABLE ppe.task_queue (
     task_id INT PRIMARY KEY REFERENCES ppe.task (task_id)
 ,   task_name TEXT NOT NULL
-,   cmd TEXT[] NULL
+,   tool TEXT NULL
+,   tool_args TEXT[] NULL
 ,   task_sql TEXT NULL
 ,   retries INT NOT NULL
 ,   timeout_seconds INT NOT NULL
@@ -639,7 +648,8 @@ BEGIN
     INSERT INTO ppe.task_queue (
         task_id
     ,   task_name
-    ,   cmd
+    ,   tool
+    ,   tool_args
     ,   task_sql
     ,   retries
     ,   timeout_seconds
@@ -648,7 +658,8 @@ BEGIN
     SELECT DISTINCT ON (t.task_id)
         t.task_id
     ,   t.task_name
-    ,   t.cmd
+    ,   t.tool
+    ,   t.tool_args
     ,   t.task_sql
     ,   t.retries
     ,   t.timeout_seconds
@@ -702,7 +713,8 @@ CREATE OR REPLACE FUNCTION ppe.get_ready_task ()
 RETURNS TABLE (
     task_id INT
 ,   task_name TEXT
-,   cmd TEXT[]
+,   tool TEXT
+,   tool_args TEXT[]
 ,   task_sql TEXT
 ,   retries INT
 ,   timeout_seconds INT
@@ -731,7 +743,8 @@ BEGIN
         SELECT
             t.task_id
         ,   t.task_name
-        ,   t.cmd
+        ,   t.tool
+        ,   t.tool_args
         ,   t.task_sql
         ,   t.retries
         ,   t.timeout_seconds
@@ -861,3 +874,69 @@ END;
 $$
 LANGUAGE plpgsql;
 
+CREATE TYPE ppe.task_issue_severity_option AS ENUM ('HIGH', 'MED', 'LOW');
+CREATE TABLE ppe.task_issue_type (
+    task_issue_type_id INT PRIMARY KEY
+,   description TEXT NOT NULL
+,   severity ppe.task_issue_severity_option NOT NULL
+,   enabled BOOL NOT NULL DEFAULT TRUE
+);
+INSERT INTO ppe.task_issue_type (task_issue_type_id, description, severity)
+VALUES
+    (1, 'The task has no schedule associated with it.', 'HIGH')
+,   (2, 'The task has repeatedly timed out.', 'HIGH')
+,   (3, 'The task has repeatedly failed.', 'MED')
+,   (4, 'Task Tool is not unique.', 'MED')
+,   (5, 'Task SQL is not unique.', 'MED')
+,   (6, 'The task is slow.', 'MED')
+,   (7, 'The task has no resources associated with it.', 'LOW')
+;
+
+CREATE TABLE ppe.task_issue (
+    task_issue_id SERIAL PRIMARY KEY
+,   task_id INT NOT NULL REFERENCES ppe.task (task_id)
+,   task_issue_type_id INT NOT NULL REFERENCES ppe.task_issue_type (task_issue_type_id)
+,   severity ppe.task_issue_severity_option NOT NULL
+,   supporting_info JSONB NOT NULL DEFAULT jsonb_build_object()
+,   ts TIMESTAMPTZ(0) NOT NULL DEFAULT now()
+,   UNIQUE (task_id, task_issue_type_id)
+);
+
+CREATE PROCEDURE ppe.update_task_issues()
+LANGUAGE plpgsql
+AS $$
+DECLARE
+BEGIN
+-- (1) task has no schedule associated with it
+-- (2) task has repeatedly timed out
+-- (3) task has repeatedly errored out
+-- (4) task tool not unique
+-- (5) task sql not unique
+-- (6) task is slow
+-- (7) task has no resources associated with it
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION ppe.get_task_issues()
+RETURNS TABLE (
+    task_id INT
+,   task_name TEXT
+,   issue TEXT
+,   severity TEXT
+)
+LANGUAGE sql
+AS $$
+    SELECT
+        ti.task_id
+    ,   t.task_name
+    ,   tit.description AS issue
+    ,   tit.severity::TEXT AS severity
+    FROM ppe.task_issue AS ti
+    JOIN ppe.task AS t
+        ON ti.task_id = t.task_id
+    JOIN ppe.task_issue_type AS tit
+        ON ti.task_issue_type_id = tit.task_issue_type_id
+    ORDER BY
+        tit.severity::TEXT
+    ,   t.task_name
+$$;

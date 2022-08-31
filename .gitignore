@@ -142,6 +142,7 @@ cython_debug/
 *.sqlite
 logs
 scratch
+tools
 config.json
 test-config.json
 NOTES.md
