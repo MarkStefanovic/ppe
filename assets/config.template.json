@@ -4,6 +4,7 @@
   "max-connections": 6,
   "seconds-between-updates": 10,
   "seconds-between-cleanups":  1800,
+  "seconds-between-retries": 600,
   "seconds-between-task-issue-updates": 600,
   "days-logs-to-keep": 3
 }

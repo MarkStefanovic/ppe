@@ -9,7 +9,30 @@ import loguru
 from src import adapter, service
 
 
-def main(
+def main():
+    loguru.logger.info("Starting ppe...")
+
+    config_file = adapter.fs.get_config_path()
+
+    seconds_between_retries = adapter.config.get_seconds_between_retries(config_file=config_file)
+
+    while True:
+        try:
+            _run(
+                connection_str=adapter.config.get_connection_str(config_file=config_file),
+                max_connections=adapter.config.get_max_connections(config_file=config_file),
+                max_jobs=adapter.config.get_max_simultaneous_jobs(config_file=config_file),
+                seconds_between_updates=adapter.config.get_seconds_between_updates(config_file=config_file),
+                seconds_between_cleanups=adapter.config.get_seconds_between_cleanups(config_file=config_file),
+                seconds_between_task_issue_updates=adapter.config.get_seconds_between_task_issue_updates(config_file=config_file),
+                days_logs_to_keep=adapter.config.get_days_logs_to_keep(config_file=config_file),
+            )
+        except Exception:  # noqa
+            loguru.logger.error(f"ppe exited abnormally, restarting in {seconds_between_retries} seconds...")
+            time.sleep(seconds_between_retries)
+
+
+def _run(
     *,
     connection_str: str,
     max_connections: int,
@@ -62,7 +85,7 @@ def main(
     except Exception as e:
         loguru.logger.exception(e)
         db.log_batch_error(error_message=f"ppe closed as a result of the following error: {e}")
-        sys.exit(-1)
+        # sys.exit(-1)
     finally:
         cancel.set()
 
@@ -75,16 +98,4 @@ if __name__ == '__main__':
     if getattr(sys, "frozen", False):
         loguru.logger.add(sys.stderr, format="{time} {level} {message}", level=logging.DEBUG)
 
-    loguru.logger.info("Starting ppe...")
-
-    config_file = adapter.fs.get_config_path()
-
-    main(
-        connection_str=adapter.config.get_connection_str(config_file=config_file),
-        max_connections=adapter.config.get_max_connections(config_file=config_file),
-        max_jobs=adapter.config.get_max_simultaneous_jobs(config_file=config_file),
-        seconds_between_updates=adapter.config.get_seconds_between_updates(config_file=config_file),
-        seconds_between_cleanups=adapter.config.get_seconds_between_cleanups(config_file=config_file),
-        seconds_between_task_issue_updates=adapter.config.get_seconds_between_task_issue_updates(config_file=config_file),
-        days_logs_to_keep=adapter.config.get_days_logs_to_keep(config_file=config_file),
-    )
+    main()

@@ -542,7 +542,7 @@ BEGIN
     ;
 
     WITH latest_job_completions AS (
-        SELECT
+        SELECT DISTINCT ON (t.job_id)
             t.job_id
         ,   t.ts
         FROM (
@@ -605,7 +605,7 @@ BEGIN
     ,   job_id
     ,   start_ts
     )
-    SELECT
+    SELECT DISTINCT ON (lta.task_id)
         lta.task_id
     ,   lta.job_id
     ,   lta.start_ts
@@ -620,6 +620,9 @@ BEGIN
                 lta.job_id = jc.job_id
         )
         AND EXTRACT(EPOCH FROM now() - lta.start_ts) <= t.timeout_seconds
+    ORDER BY
+        lta.task_id
+    ,   lta.start_ts DESC
     ;
 
     TRUNCATE ppe.resource_status;

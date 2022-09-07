@@ -13,6 +13,7 @@ __all__ = (
     "get_max_connections",
     "get_max_simultaneous_jobs",
     "get_seconds_between_cleanups",
+    "get_seconds_between_retries",
     "get_seconds_between_updates",
 )
 
@@ -42,6 +43,11 @@ def get_seconds_between_cleanups(*, config_file: pathlib.Path) -> int:
 
 
 @functools.lru_cache(maxsize=1)
+def get_seconds_between_retries(*, config_file: pathlib.Path) -> int:
+    return typing.cast(int, _load(config_file=config_file)["seconds-between-retries"])
+
+
+@functools.lru_cache(maxsize=1)
 def get_seconds_between_updates(*, config_file: pathlib.Path) -> int:
     return typing.cast(int, _load(config_file=config_file)["seconds-between-updates"])
 
@@ -49,6 +55,7 @@ def get_seconds_between_updates(*, config_file: pathlib.Path) -> int:
 @functools.lru_cache(maxsize=1)
 def get_seconds_between_task_issue_updates(*, config_file: pathlib.Path) -> int:
     return typing.cast(int, _load(config_file=config_file)["seconds-between-task-issue-updates"])
+
 
 @functools.lru_cache(maxsize=1)
 def _load(*, config_file: pathlib.Path) -> dict[str, typing.Hashable]:
