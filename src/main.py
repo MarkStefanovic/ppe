@@ -85,8 +85,8 @@ def _run(
     except Exception as e:
         loguru.logger.exception(e)
         db.log_batch_error(error_message=f"ppe closed as a result of the following error: {e}")
-        # sys.exit(-1)
     finally:
+        pool.closeall()
         cancel.set()
 
 
