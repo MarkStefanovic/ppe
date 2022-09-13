@@ -126,7 +126,7 @@ BEGIN
     ASSERT p_units > 0, 'p_units must be > 0.';
 
     v_capacity = (SELECT r.capacity FROM ppe.resource AS r WHERE r.resource_id = p_resource_id);
-    ASSERT p_units < v_capacity, FORMAT('p_units (%s) is more than the resource''s capacity (%s).', p_units, v_capacity);
+    ASSERT p_units <= v_capacity, FORMAT('p_units (%s) is more than the resource''s capacity (%s).', p_units, v_capacity);
 
     INSERT INTO ppe.task_resource (task_id, resource_id, units)
     VALUES (p_task_id, p_resource_id, p_units);
@@ -965,6 +965,8 @@ BEGIN
         ,   'task_ids', string_agg(t.task_id::TEXT, ', ')
         ) AS supporting_info
     FROM ppe.task AS t
+    WHERE
+        length(t.task_sql) > 0
     GROUP BY
         t.task_sql
     HAVING

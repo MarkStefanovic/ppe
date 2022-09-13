@@ -24,7 +24,7 @@ def create_pool(
 # noinspection PyBroadException
 @contextlib.contextmanager
 def _connect(*, pool: psycopg2.pool.ThreadedConnectionPool) -> connection:
-    con = pool.getconn()
+    con: connection = pool.getconn()
     try:
         yield con
     except BaseException:
@@ -33,7 +33,8 @@ def _connect(*, pool: psycopg2.pool.ThreadedConnectionPool) -> connection:
     else:
         con.commit()
     finally:
-        pool.putconn(con)
+        if con.closed == 0:
+            pool.putconn(con)
 
 
 def open_db(*, batch_id: int, pool: psycopg2.pool.ThreadedConnectionPool, days_logs_to_keep: int) -> Db:
