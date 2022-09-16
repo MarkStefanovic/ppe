@@ -9,7 +9,7 @@ import threading
 import time
 import typing
 
-import loguru
+from loguru import logger
 import psycopg2
 
 from src import adapter, data
@@ -52,7 +52,7 @@ class Runner(threading.Thread):
             try:
                 job = self._db.get_ready_job()
                 if job is not None:
-                    loguru.logger.info(f"Starting [{job.task.name}]...")
+                    logger.info(f"Starting [{job.task.name}]...")
 
                     result = _run_job_with_retry(
                         connection_str=self._connection_str,
@@ -63,10 +63,10 @@ class Runner(threading.Thread):
 
                     _add_result(db=self._db, result=result)
             except queue.Empty:
-                loguru.logger.debug("Queue is empty")
+                logger.debug("Queue is empty")
             except Exception as e:
                 self._e = e
-                loguru.logger.exception(e)
+                logger.exception(e)
                 self._db.log_batch_error(error_message=str(e))
                 self._cancel.set()
 
@@ -75,7 +75,7 @@ class Runner(threading.Thread):
 
 def _add_result(*, db: adapter.db.Db, result: data.JobResult) -> None:
     if result.is_err:
-        loguru.logger.info(f"[{result.job.task.name}] failed: {result.error_message}.")
+        logger.info(f"[{result.job.task.name}] failed with the following error message: {result.error_message}.")
 
         db.log_job_error(
             job_id=result.job.job_id,
@@ -83,7 +83,7 @@ def _add_result(*, db: adapter.db.Db, result: data.JobResult) -> None:
             error_message=result.error_message or "No error message was provided.",
         )
     else:
-        loguru.logger.info(f"[{result.job.task.name}] completed successfully.")
+        logger.info(f"[{result.job.task.name}] completed successfully in {result.execution_millis} milliseconds.")
 
         db.log_job_success(
             job_id=result.job.job_id,
@@ -98,7 +98,6 @@ def _run_job_with_retry(
     job: data.Job,
     retries_so_far: int = 0,
 ) -> data.JobResult:
-    loguru.logger.debug(f"Running [{job.task.name}]")
     try:
         result = _run_job_in_process(
             connection_str=connection_str,
@@ -108,7 +107,7 @@ def _run_job_with_retry(
         )
         if result.is_err:
             if job.task.retries > retries_so_far:
-                loguru.logger.info(f"Retrying [{job.task.name}] ({retries_so_far + 1}/{job.task.retries})...")
+                logger.info(f"Retrying [{job.task.name}] ({retries_so_far + 1}/{job.task.retries})...")
                 return _run_job_with_retry(
                     connection_str=connection_str,
                     tool_dir=tool_dir,
@@ -119,7 +118,7 @@ def _run_job_with_retry(
         return result
     except Exception as e:
         if job.task.retries > retries_so_far:
-            loguru.logger.info(f"Retrying [{job.task.name}] ({retries_so_far + 1}/{job.task.retries})...")
+            logger.info(f"Retrying [{job.task.name}] ({retries_so_far + 1}/{job.task.retries})...")
             return _run_job_with_retry(
                 connection_str=connection_str,
                 tool_dir=tool_dir,
@@ -127,8 +126,6 @@ def _run_job_with_retry(
                 retries_so_far=retries_so_far + 1,
             )
         return data.JobResult.error(job=job, code=-1, message=str(e), retries=retries_so_far)
-    finally:
-        loguru.logger.debug(f"[{job.task.name}] finished.")
 
 
 def _run_job_in_process(
@@ -146,7 +143,7 @@ def _run_job_in_process(
         p.join()
         return result
     except queue.Empty:
-        loguru.logger.error(f"[{job.task.name}] timed out after {job.task.timeout_seconds} seconds.")
+        logger.error(f"[{job.task.name}] timed out after {job.task.timeout_seconds} seconds.")
         return data.JobResult.error(
             job=job,
             code=-1,
@@ -154,7 +151,7 @@ def _run_job_in_process(
             retries=retries,
         )
     except Exception as e:
-        loguru.logger.exception(e)
+        logger.exception(e)
         return data.JobResult.error(job=job, code=-1, message=str(e), retries=retries)
     finally:
         result_queue.close()
@@ -223,7 +220,6 @@ def _run_tool(
     except Exception as e:
         result = data.JobResult.error(job=job, code=-1, message=str(e), retries=retries)
     finally:
-        loguru.logger.debug(f"Finished running {job}.")
         result_queue.put(result)
 
 

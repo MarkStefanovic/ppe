@@ -1,4 +1,3 @@
-import logging
 import os
 import sys
 import threading
@@ -86,16 +85,15 @@ def _run(
         loguru.logger.exception(e)
         db.log_batch_error(error_message=f"ppe closed as a result of the following error: {e}")
     finally:
-        pool.closeall()
         cancel.set()
+        pool.closeall()
 
 
 if __name__ == '__main__':
     adapter.fs.get_log_folder().mkdir(exist_ok=True)
 
+    loguru.logger.remove()
     loguru.logger.add(adapter.fs.get_log_folder() / "error.log", rotation="5 MB", retention="7 days", level="ERROR")
-
-    if getattr(sys, "frozen", False):
-        loguru.logger.add(sys.stderr, format="{time} {level} {message}", level=logging.DEBUG)
+    loguru.logger.add(sys.stderr, level="INFO")
 
     main()

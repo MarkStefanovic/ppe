@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import abc
 import contextlib
 import threading
 
@@ -28,19 +27,21 @@ def _connect(*, pool: psycopg2.pool.ThreadedConnectionPool) -> connection:
     try:
         yield con
     except BaseException:
-        con.rollback()
+        if con.closed == 0:
+            con.rollback()
         raise
     else:
-        con.commit()
+        if con.closed == 0:
+            con.commit()
     finally:
         if con.closed == 0:
             pool.putconn(con)
 
 
-def open_db(*, batch_id: int, pool: psycopg2.pool.ThreadedConnectionPool, days_logs_to_keep: int) -> Db:
+def open_db(*, batch_id: int, pool: psycopg2.pool.ThreadedConnectionPool, days_logs_to_keep: int) -> data.Db:
     loguru.logger.info("Opening database...")
 
-    return _Db(batch_id=batch_id, pool=pool, days_logs_to_keep=days_logs_to_keep)
+    return Pg(batch_id=batch_id, pool=pool, days_logs_to_keep=days_logs_to_keep)
 
 
 # noinspection SqlDialectInspection
@@ -53,46 +54,8 @@ def create_batch(*, pool: psycopg2.pool.ThreadedConnectionPool) -> int:
             raise Exception(f"ppe.create_batch should have returned an int, but returned {row!r}.")
 
 
-class Db(abc.ABC):
-    @abc.abstractmethod
-    def cancel_running_jobs(self, *, reason: str) -> None:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def delete_old_logs(self) -> None:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def get_ready_job(self) -> data.Job | None:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def log_batch_info(self, *, message: str) -> None:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def log_batch_error(self, *, error_message: str) -> None:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def log_job_error(self, *, job_id: int, return_code: int, error_message: str) -> None:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def log_job_success(self, *, job_id: int, execution_millis: int) -> None:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def update_queue(self) -> None:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def update_task_issues(self) -> None:
-        raise NotImplementedError
-
-
 # noinspection SqlDialectInspection
-class _Db(Db):
+class Pg(data.Db):
     def __init__(
         self,
         *,
