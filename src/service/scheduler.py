@@ -6,7 +6,7 @@ import time
 
 import loguru
 
-from src import adapter, data
+from src import data
 
 __all__ = ("Scheduler",)
 

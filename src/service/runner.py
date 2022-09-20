@@ -9,10 +9,10 @@ import threading
 import time
 import typing
 
-from loguru import logger
 import psycopg2
+from loguru import logger
 
-from src import adapter, data
+from src import data
 
 __all__ = ("Runner",)
 

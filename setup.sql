@@ -884,7 +884,6 @@ BEGIN
         FROM tmp_ppe_batches_to_delete tmp
         WHERE b.batch_id = tmp.batch_id
     );
-
 END;
 $$
 LANGUAGE plpgsql;
