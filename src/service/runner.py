@@ -83,7 +83,7 @@ def _add_result(*, db: data.Db, result: data.JobResult) -> None:
             error_message=result.error_message or "No error message was provided.",
         )
     else:
-        logger.info(f"[{result.job.task.name}] completed successfully in {result.execution_millis} milliseconds.")
+        logger.info(f"[{result.job.task.name}] completed successfully in {result.execution_millis/1000:.0f} seconds.")
 
         db.log_job_success(
             job_id=result.job.job_id,

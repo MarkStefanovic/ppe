@@ -770,6 +770,12 @@ CREATE OR REPLACE PROCEDURE ppe.delete_old_log_entries(
 AS $$
 DECLARE
     v_cutoff TIMESTAMPTZ(0) = now() - make_interval(days := COALESCE(p_days_to_keep, 3));
+    v_current_batch_ts TIMESTAMPTZ(0) = (
+        SELECT b.ts
+        FROM ppe.batch AS b
+        WHERE b.batch_id = p_current_batch_id
+    );
+
 BEGIN
     RAISE NOTICE 'v_cutoff: %', v_cutoff;
 
@@ -857,6 +863,7 @@ BEGIN
     FROM ppe.batch AS b
     WHERE
         b.batch_id <> p_current_batch_id
+        AND b.ts < v_current_batch_ts
         AND NOT EXISTS (
             SELECT 1
             FROM ppe.job AS j
