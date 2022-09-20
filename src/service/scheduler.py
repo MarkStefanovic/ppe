@@ -6,7 +6,7 @@ import time
 
 import loguru
 
-from src import adapter
+from src import data
 
 __all__ = ("Scheduler",)
 
@@ -15,7 +15,7 @@ class Scheduler(threading.Thread):
     def __init__(
         self,
         *,
-        db: adapter.db.Db,
+        db: data.Db,
         seconds_between_updates: int,
         seconds_between_cleanups: int,
         seconds_between_task_issue_updates: int,

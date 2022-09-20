@@ -790,6 +790,13 @@ BEGIN
         WHERE lta.job_id = tmp.job_id
     );
 
+    DELETE FROM ppe.job_cancel AS jc
+    WHERE EXISTS (
+        SELECT 1
+        FROM tmp_ppe_jobs_to_delete AS tmp
+        WHERE jc.job_id = tmp.job_id
+    );
+
     DELETE FROM ppe.job_complete AS ji
     WHERE EXISTS (
         SELECT 1
@@ -877,7 +884,6 @@ BEGIN
         FROM tmp_ppe_batches_to_delete tmp
         WHERE b.batch_id = tmp.batch_id
     );
-
 END;
 $$
 LANGUAGE plpgsql;

@@ -9,10 +9,10 @@ import threading
 import time
 import typing
 
-from loguru import logger
 import psycopg2
+from loguru import logger
 
-from src import adapter, data
+from src import data
 
 __all__ = ("Runner",)
 
@@ -21,7 +21,7 @@ class Runner(threading.Thread):
     def __init__(
         self,
         *,
-        db: adapter.db.Db,
+        db: data.Db,
         connection_str: str,
         tool_dir: pathlib.Path,
         cancel: threading.Event,
@@ -41,7 +41,7 @@ class Runner(threading.Thread):
     def join(self, timeout: float | None = None) -> None:
         super().join()
 
-        loguru.logger.info("Runner stopped.")
+        logger.info("Runner stopped.")
 
         # reraise exception in main thread
         if self._e is not None:
@@ -73,7 +73,7 @@ class Runner(threading.Thread):
             time.sleep(1)
 
 
-def _add_result(*, db: adapter.db.Db, result: data.JobResult) -> None:
+def _add_result(*, db: data.Db, result: data.JobResult) -> None:
     if result.is_err:
         logger.info(f"[{result.job.task.name}] failed with the following error message: {result.error_message}.")
 

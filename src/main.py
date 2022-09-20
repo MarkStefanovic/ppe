@@ -8,7 +8,7 @@ import loguru
 from src import adapter, service
 
 
-def main():
+def main() -> None:
     loguru.logger.info("Starting ppe...")
 
     config_file = adapter.fs.get_config_path()
