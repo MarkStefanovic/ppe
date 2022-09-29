@@ -27,15 +27,12 @@ def _connect(*, pool: psycopg2.pool.ThreadedConnectionPool) -> connection:
     try:
         yield con
     except BaseException:
-        if con.closed == 0:
-            con.rollback()
+        con.rollback()
         raise
     else:
-        if con.closed == 0:
-            con.commit()
+        con.commit()
     finally:
-        if con.closed == 0:
-            pool.putconn(con)
+        pool.putconn(con)
 
 
 def open_db(*, batch_id: int, pool: psycopg2.pool.ThreadedConnectionPool, days_logs_to_keep: int) -> data.Db:

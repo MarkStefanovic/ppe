@@ -141,7 +141,7 @@ cython_debug/
 .idea
 *.sqlite
 logs
-scratch
+sql
 tools
 config.json
 test-config.json

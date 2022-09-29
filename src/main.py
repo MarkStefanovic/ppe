@@ -2,6 +2,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 
 import loguru
 
@@ -83,7 +84,8 @@ def _run(
         sys.exit()
     except Exception as e:
         loguru.logger.exception(e)
-        db.log_batch_error(error_message=f"ppe closed as a result of the following error: {e}")
+        db.log_batch_error(error_message=f"ppe ran into an error: {e!s}\n{traceback.format_exc()}")
+        raise
     finally:
         cancel.set()
         pool.closeall()
@@ -96,4 +98,9 @@ if __name__ == '__main__':
     loguru.logger.add(adapter.fs.get_log_folder() / "error.log", rotation="5 MB", retention="7 days", level="ERROR")
     loguru.logger.add(sys.stderr, level="INFO")
 
-    main()
+    try:
+        main()
+        sys.exit(0)
+    except Exception as e:
+        loguru.logger.exception(e)
+        sys.exit(1)
