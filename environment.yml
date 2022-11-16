@@ -9,6 +9,7 @@ dependencies:
 - pip
 - loguru
 - mypy
+- pyinstaller
 - pytest
 - psycopg2-binary
 - typer

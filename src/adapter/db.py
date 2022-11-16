@@ -5,19 +5,25 @@ import threading
 
 import loguru
 import psycopg2.pool
+# noinspection PyProtectedMember
 from psycopg2._psycopg import connection
 
 from src import data
 
-__all__ = ("create_batch", "create_pool", "Db", "open_db")
+__all__ = ("create_batch", "create_pool", "Pg", "open_db")
 
 
+@contextlib.contextmanager
 def create_pool(
     *,
     connection_str: str,
     max_size: int,
 ) -> psycopg2.pool.ThreadedConnectionPool:
-    return psycopg2.pool.ThreadedConnectionPool(3, max_size, dsn=connection_str)
+    pool = psycopg2.pool.ThreadedConnectionPool(3, max_size, dsn=connection_str)
+    try:
+        yield pool
+    finally:
+        pool.closeall()
 
 
 # noinspection PyBroadException
@@ -45,6 +51,7 @@ def open_db(*, batch_id: int, pool: psycopg2.pool.ThreadedConnectionPool, days_l
 def create_batch(*, pool: psycopg2.pool.ThreadedConnectionPool) -> int:
     with _connect(pool=pool) as con:
         with con.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = '5min';SET LOCAL lock_timeout = '1min';")
             cur.execute("SELECT * FROM ppe.create_batch();")
             if row := cur.fetchone():
                 return row[0]
@@ -70,6 +77,7 @@ class Pg(data.Db):
         with self._lock:
             with self._pool.getconn() as con:
                 with con.cursor() as cur:
+                    cur.execute("SET LOCAL statement_timeout = '5min';SET LOCAL lock_timeout = '1min';")
                     cur.execute(
                         "CALL ppe.cancel_running_jobs(p_reason := %(reason)s);",
                         {"reason": reason},
@@ -80,6 +88,7 @@ class Pg(data.Db):
         with self._lock:
             with _connect(pool=self._pool) as con:
                 with con.cursor() as cur:
+                    cur.execute("SET LOCAL statement_timeout = '5min';SET LOCAL lock_timeout = '1min';")
                     cur.execute(
                         "CALL ppe.delete_old_log_entries(p_current_batch_id := %(batch_id)s, p_days_to_keep := %(days_to_keep)s)",
                         {"batch_id": self._batch_id, "days_to_keep": self._days_logs_to_keep},
@@ -90,6 +99,7 @@ class Pg(data.Db):
         with self._lock:
             with _connect(pool=self._pool) as con:
                 with con.cursor() as cur:
+                    cur.execute("SET LOCAL statement_timeout = '5min';SET LOCAL lock_timeout = '1min';")
                     cur.execute("""
                         SELECT
                             t.task_id
@@ -125,6 +135,7 @@ class Pg(data.Db):
     def log_batch_info(self, *, message: str) -> None:
         with _connect(pool=self._pool) as con:
             with con.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '5min';SET LOCAL lock_timeout = '1min';")
                 cur.execute(
                     "CALL ppe.log_batch_info(p_batch_id := %(batch_id)s, p_message := %(message)s);",
                     {"batch_id": self._batch_id, "message": message},
@@ -133,6 +144,7 @@ class Pg(data.Db):
     def log_batch_error(self, *, error_message: str) -> None:
         with _connect(pool=self._pool) as con:
             with con.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '5min';SET LOCAL lock_timeout = '1min';")
                 cur.execute(
                     "CALL ppe.log_batch_error(p_batch_id := %(batch_id)s, p_message := %(error_message)s);",
                     {"batch_id": self._batch_id, "error_message": error_message},
@@ -141,6 +153,7 @@ class Pg(data.Db):
     def log_job_error(self, *, job_id: int, return_code: int, error_message: str) -> None:
         with _connect(pool=self._pool) as con:
             with con.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '5min';SET LOCAL lock_timeout = '1min';")
                 cur.execute(
                     "CALL ppe.job_failed(p_job_id := %(job_id)s, p_message := %(error_message)s);",
                     {"job_id": job_id, "error_message": error_message},
@@ -149,6 +162,7 @@ class Pg(data.Db):
     def log_job_success(self, *, job_id: int, execution_millis: int) -> None:
         with _connect(pool=self._pool) as con:
             with con.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '5min';SET LOCAL lock_timeout = '1min';")
                 cur.execute(
                     "CALL ppe.job_completed_successfully(p_job_id := %(job_id)s, p_execution_millis := %(execution_millis)s);",
                     {"job_id": job_id, "execution_millis": execution_millis},
@@ -160,6 +174,7 @@ class Pg(data.Db):
             with _connect(pool=self._pool) as con:
                 cur: psycopg2.cursor
                 with con.cursor() as cur:
+                    cur.execute("SET LOCAL statement_timeout = '5min';SET LOCAL lock_timeout = '1min';")
                     cur.execute("CALL ppe.update_queue();")
         loguru.logger.debug("Finished updating queue.")
 
@@ -169,5 +184,6 @@ class Pg(data.Db):
             with _connect(pool=self._pool) as con:
                 cur: psycopg2.cursor
                 with con.cursor() as cur:
+                    cur.execute("SET LOCAL statement_timeout = '5min';SET LOCAL lock_timeout = '1min';")
                     cur.execute("CALL ppe.update_task_issues();")
         loguru.logger.debug("Finished updating task issues.")
