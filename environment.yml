@@ -12,4 +12,3 @@ dependencies:
 - pyinstaller
 - pytest
 - psycopg2-binary
-- typer
