@@ -6,5 +6,6 @@
   "seconds-between-cleanups":  1800,
   "seconds-between-retries": 600,
   "seconds-between-task-issue-updates": 600,
-  "days-logs-to-keep": 3
+  "days-logs-to-keep": 3,
+  "conda-project-root": "C:/py/projects"
 }

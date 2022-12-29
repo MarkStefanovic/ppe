@@ -19,19 +19,19 @@ def _root_dir() -> pathlib.Path:
             raise Exception(f"ppe not found in path, {__file__}.")
 
 
-@functools.lru_cache(maxsize=1)
+@functools.lru_cache
 def get_config_path() -> pathlib.Path:
     return _root_dir() / "assets" / "config.json"
 
 
-@functools.lru_cache(maxsize=1)
+@functools.lru_cache
 def get_log_folder() -> pathlib.Path:
     d = _root_dir() / "logs"
     d.mkdir(exist_ok=True)
     return d
 
 
-@functools.lru_cache(maxsize=1)
+@functools.lru_cache
 def get_tool_dir() -> pathlib.Path:
     d = _root_dir() / "tools"
     d.mkdir(exist_ok=True)

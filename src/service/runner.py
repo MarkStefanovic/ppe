@@ -137,7 +137,7 @@ def _run_job_in_process(
 ) -> data.JobResult:
     result_queue: "mp.Queue[data.JobResult]" = mp.Queue()
     try:
-        p = mp.Process(target=_run, args=(job, connection_str, tool_dir, result_queue, retries))
+        p = mp.Process(target=_run_job, args=(job, connection_str, tool_dir, result_queue, retries))
         p.start()
         result = result_queue.get(block=True, timeout=job.task.timeout_seconds)
         p.join()
@@ -157,7 +157,7 @@ def _run_job_in_process(
         result_queue.close()
 
 
-def _run(
+def _run_job(
     job: data.Job,
     connection_str: str,
     tool_dir: pathlib.Path,
@@ -165,21 +165,31 @@ def _run(
     retries: int,
     /,
 ) -> None:
-    if job.task.tool:
-        _run_tool(job=job, tool_dir=tool_dir, result_queue=result_queue, retries=retries)
+    if isinstance(job.task, data.CmdLineUtilityTask):
+        _run_cmd_line_utility_task(job=job, tool_dir=tool_dir, result_queue=result_queue, retries=retries)
+    elif isinstance(job.task, data.CondaProjectTask):
+        _run_conda_project_task(job=job, tool_dir=tool_dir, result_queue=result_queue, retries=retries)
+    elif isinstance(job.task, data.SQLTask):
+        _run_sql_task(job=job, connection_str=connection_str, result_queue=result_queue, retries=retries)
     else:
-        _run_sql(job=job, connection_str=connection_str, result_queue=result_queue, retries=retries)
+        raise Exception(f"Unrecognized job task, {job.task.__class__.__name__}.")  # todo create custom exception
 
 
-def _run_tool(
+def _run_cmd_line_utility_task(
     *,
     job: data.Job,
     tool_dir: pathlib.Path,
     result_queue: "mp.Queue[data.JobResult]",
     retries: int,
 ) -> None:
-    result = data.JobResult.error(job=job, code=-1, message=f"[{job.task.name}] never ran.", retries=retries)
-    assert job.task.tool is not None
+    assert isinstance(job.task, data.CmdLineUtilityTask)
+
+    result = data.JobResult.error(
+        job=job,
+        code=-1,
+        message=f"[{job.task.name}] never ran.",
+        retries=retries,
+    )
     try:
         if (fp := (tool_dir / job.task.tool)).exists():
             tool_path = fp
@@ -205,7 +215,9 @@ def _run_tool(
             timeout=job.task.timeout_seconds,
             cwd=tool_path.parent,
         )
+
         execution_millis = int((datetime.datetime.now() - start).total_seconds() * 1000)
+
         if proc_result.returncode:
             result = data.JobResult.error(
                 job=job,
@@ -214,7 +226,11 @@ def _run_tool(
                 retries=retries,
             )
         else:
-            result = data.JobResult.success(job=job, execution_millis=execution_millis, retries=retries)
+            result = data.JobResult.success(
+                job=job,
+                execution_millis=execution_millis,
+                retries=retries,
+            )
     except subprocess.TimeoutExpired:
         result = data.JobResult.error(job=job, code=-1, message="Job timed out.", retries=retries)
     except Exception as e:
@@ -223,14 +239,21 @@ def _run_tool(
         result_queue.put(result)
 
 
-def _run_sql(
+def _run_sql_task(
     *,
     job: data.Job,
     connection_str: str,
     result_queue: "mp.Queue[data.JobResult]",
     retries: int,
 ) -> None:
-    result = data.JobResult.error(job=job, code=-1, message=f"[{job.task.name}] never ran.", retries=retries)
+    assert isinstance(job.task, data.SQLTask)
+
+    result = data.JobResult.error(
+        job=job,
+        code=-1,
+        message=f"[{job.task.name}] never ran.",
+        retries=retries,
+    )
     try:
         start = datetime.datetime.now()
 
@@ -244,6 +267,11 @@ def _run_sql(
             retries=retries,
         )
     except Exception as e:
-        result = data.JobResult.error(job=job, code=-1, message=str(e), retries=retries)
+        result = data.JobResult.error(
+            job=job,
+            code=-1,
+            message=str(e),
+            retries=retries,
+        )
     finally:
         result_queue.put(result)
